@@ -1,0 +1,166 @@
+{
+  "meta": {
+    "classes": {
+      "1": "forest_floor",
+      "2": "tree_trunks",
+      "3": "branches_canopy",
+      "4": "understory",
+      "5": "objects"
+    },
+    "ignore_index": 255,
+    "class_display_names": {
+      "1": "Forest Floor",
+      "2": "Tree Trunks",
+      "3": "Branches & Canopy",
+      "4": "Understory",
+      "5": "Objects",
+      "255": "Ignore / void"
+    },
+    "class_descriptions": {
+      "1": "ground/terrain",
+      "2": "stems",
+      "3": "mid/upper canopy",
+      "4": "low vegetation",
+      "5": "manmade gear, poles, fences, vehicles, scanners, targets",
+      "255": "void / unlabeled"
+    },
+    "height_split": {
+      "threshold_m": 2.0,
+      "desc": "vegetation with normalized height < threshold -> Understory (4); else Branches & Canopy (3)"
+    }
+  },
+  "datasets": {
+    "ForestSemantic": {
+      "rules": [
+        {
+          "ids": [
+            1
+          ],
+          "to": 1
+        },
+        {
+          "ids": [
+            3
+          ],
+          "to": 2
+        },
+        {
+          "ids": [
+            2
+          ],
+          "to": "by_height"
+        },
+        {
+          "ids": [
+            4
+          ],
+          "to": "debris_policy"
+        }
+      ],
+      "debris_policy": "understory",
+      "unlabeled_ids": [
+        0
+      ]
+    },
+    "DigiForests": {
+      "rules": [
+        {
+          "ids": [
+            1
+          ],
+          "to": 1
+        },
+        {
+          "ids": [
+            3
+          ],
+          "to": 2
+        },
+        {
+          "ids": [
+            2
+          ],
+          "to": "by_height"
+        },
+        {
+          "ids": [
+            4
+          ],
+          "to": "debris_policy"
+        },
+        {
+          "ids": [
+            5
+          ],
+          "to": 5
+        }
+      ],
+      "debris_policy": "understory",
+      "unlabeled_ids": [
+        0
+      ]
+    },
+    "Semantic3D": {
+      "rules": [
+        {
+          "ids": [
+            1,
+            2
+          ],
+          "to": 1
+        },
+        {
+          "ids": [
+            3,
+            4
+          ],
+          "to": "by_height"
+        },
+        {
+          "ids": [
+            5,
+            6,
+            8
+          ],
+          "to": 5
+        },
+        {
+          "ids": [
+            7
+          ],
+          "to": 255
+        }
+      ],
+      "unlabeled_ids": [
+        0
+      ]
+    }
+  },
+  "sample_weights": {
+    "Semantic3D": {
+      "0": 2000,
+      "1": 25000,
+      "2": 120000,
+      "3": 90000,
+      "4": 45000,
+      "5": 30000,
+      "6": 55000,
+      "7": 1500,
+      "8": 5500
+    },
+    "ForestSemantic": {
+      "1": 80000,
+      "2": 22000,
+      "3": 65000,
+      "4": 50000,
+      "5": 95000,
+      "6": 5000
+    },
+    "DigiForests": {
+      "1": 40000,
+      "2": 28000,
+      "3": 18000,
+      "4": 70000
+    }
+  }
+}
