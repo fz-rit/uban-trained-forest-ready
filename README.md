@@ -10,9 +10,9 @@ Utilities to remap labels across datasets and visualize mappings with <abbr titl
 
 ## Install
 ```bash
-conda create -n domain_adapt_env python=3.11
+conda create -n domain_adapt_env python=3.11 -y
 conda activate domain_adapt_env
-pip install plotly kaleido numpy
+pip install plotly kaleido numpy matplotlib pandas
 ```
 
 ## Remap labels to unified classes

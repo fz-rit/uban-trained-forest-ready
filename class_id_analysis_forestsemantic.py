@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-
+import laspy
 import matplotlib.pyplot as plt
 from pathlib import Path
 plt.rcParams.update({
@@ -14,30 +14,42 @@ plt.rcParams.update({
 })
 CLASS_MAP = {
     0: 'unlabeled points',
-    1: 'man-made terrain',
-    2: 'natural terrain',
-    3: 'high vegetation',
-    4: 'low vegetation',
-    5: 'buildings',
-    6: 'hard scape',
-    7: 'scanning artefacts',
-    8: 'cars'
+    1: 'Ground',
+    2: 'Trunk',
+    3: 'First-order branch',
+    4: 'Higher-order branch',
+    5: 'Foliage',
+    6: 'Miscellany',
 }
 
 
 
+# def read_class_id_label(file_path):
+#     """
+#     Read a .label file and return a numpy array of class ids.
+#     """
+#     labels = pd.read_csv(file_path,
+#                         header=None,
+#                         sep=r'\s+',
+#                         dtype=np.int32).values
+#     labels = np.array(labels, dtype=np.int32).reshape((-1,))
+#     print(f"Shape of class_id array: {labels.shape}")
+#     print(f"Type of class_id array: {labels.dtype}")
+#     print(f"Unique values in class_id array: {np.unique(labels)}")
+#     return labels
 def read_class_id_label(file_path):
     """
-    Read a .label file and return a numpy array of class ids.
+    Read the label from classification of a .las file and return a numpy array of class ids.
     """
-    labels = pd.read_csv(file_path,
-                        header=None,
-                        sep=r'\s+',
-                        dtype=np.int32).values
+    las = laspy.read(file_path)
+    labels = las.classification
+    assert labels is not None, "No classification data found in the .las file."
     labels = np.array(labels, dtype=np.int32).reshape((-1,))
     print(f"Shape of class_id array: {labels.shape}")
     print(f"Type of class_id array: {labels.dtype}")
     print(f"Unique values in class_id array: {np.unique(labels)}")
+    assert np.all(np.isin(labels, list(CLASS_MAP.keys()))), "Labels contain unexpected class ids."
+    
     return labels
 
 
@@ -61,7 +73,6 @@ def grab_class_id(file_paths):
         class_0_num_ls.append(class_0_num)
         class_0_ratio_ls.append(class_0_ratio)
     class_id_all = np.concatenate(class_id_ls)
-    # class_0_tuple = (class_0_num_ls, class_0_ratio_ls)
     class_0_df = pd.DataFrame({
         'File': [str(fp.name) for fp in file_paths],
         'Class 0 Count': class_0_num_ls,
@@ -128,29 +139,27 @@ def plot_class_id_hist(class_id_vec, class_map, save_path):
 
 
 def main():
-    # prefix = "test"
-    for prefix in ["test", "train"]:
-        root_dir = Path(f"/home/fzhcis/data/semantic3d_full/Semantic3D")
-        # label_paths = list(root_dir.glob('**/*.labels'))
-        label_dir = root_dir / prefix
-        label_paths = list(label_dir.glob('*.labels'))
-        if len(label_paths) != 15:
-            raise ValueError(f"Expected 15 label files, found {len(label_paths)}. Please check the directory structure.")
-        class_id_ls, class_id_all, class_0_df = grab_class_id(label_paths)
-        save_path = root_dir / f"{prefix}_class_id_histogram.png"
-        counts, ratios = plot_class_id_hist(class_id_all, CLASS_MAP, save_path=save_path)
-        output_csv = root_dir / f"{prefix}_class_id_distribution.csv"
-        df = pd.DataFrame({
-            'Class ID': np.unique(class_id_all),
-            'Class Name': [CLASS_MAP[cid] for cid in np.unique(class_id_all)],
-            'Count': counts,
-            'Ratio (%)': ratios * 100
-        })
-        df.to_csv(output_csv, index=False)
-        print(f"Class ID distribution saved to {output_csv}")
-        class_0_csv = root_dir / f"{prefix}_class_0_distribution.csv"
-        class_0_df.to_csv(class_0_csv, index=False)
-        print(f"Class 0 distribution saved to {class_0_csv}")
+    # for prefix in ["Plot_1", "Plot_3", "Plot_5"]:
+    root_dir = Path(f"/home/fzhcis/mylab/data/ForestSemantic")
+    pcd_paths = list(root_dir.glob('**/*.las'))
+    pcd_paths.sort()
+    pcd_paths = [pcd_paths[0]]
+    class_id_ls, class_id_all, class_0_df = grab_class_id(pcd_paths)
+    prefix = "ForestSemantic_all"
+    save_path = root_dir / f"{prefix}_class_id_histogram.png"
+    counts, ratios = plot_class_id_hist(class_id_all, CLASS_MAP, save_path=save_path)
+    output_csv = root_dir / f"{prefix}_class_id_distribution.csv"
+    df = pd.DataFrame({
+        'Class ID': np.unique(class_id_all),
+        'Class Name': [CLASS_MAP[cid] for cid in np.unique(class_id_all)],
+        'Count': counts,
+        'Ratio (%)': ratios * 100
+    })
+    df.to_csv(output_csv, index=False)
+    print(f"Class ID distribution saved to {output_csv}")
+    class_0_csv = root_dir / f"{prefix}_class_0_distribution.csv"
+    class_0_df.to_csv(class_0_csv, index=False)
+    print(f"Class 0 distribution saved to {class_0_csv}")
 
 if __name__ == "__main__":
     main()
