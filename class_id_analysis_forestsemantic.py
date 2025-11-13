@@ -20,6 +20,7 @@ CLASS_MAP = {
     4: 'Higher-order branch',
     5: 'Foliage',
     6: 'Miscellany',
+    7: 'strange points'
 }
 
 
@@ -43,6 +44,8 @@ def read_class_id_label(file_path):
     """
     las = laspy.read(file_path)
     labels = las.classification
+    # There are about 0.01% of points labeled as 7, not known which class, get rid of label==7
+    labels = labels[labels <= 6]
     assert labels is not None, "No classification data found in the .las file."
     labels = np.array(labels, dtype=np.int32).reshape((-1,))
     print(f"Shape of class_id array: {labels.shape}")
@@ -66,19 +69,9 @@ def grab_class_id(file_paths):
         
         class_id_col = read_class_id_label(file_path)
        
-        class_0_num = (class_id_col == 0).sum()
-        class_0_ratio = class_0_num / len(class_id_col) * 100
-        print(f"File: {file_path}, Number of class 0 points: {class_0_num}, Ratio: {class_0_ratio:.2f}%")
         class_id_ls.append(class_id_col)
-        class_0_num_ls.append(class_0_num)
-        class_0_ratio_ls.append(class_0_ratio)
     class_id_all = np.concatenate(class_id_ls)
-    class_0_df = pd.DataFrame({
-        'File': [str(fp.name) for fp in file_paths],
-        'Class 0 Count': class_0_num_ls,
-        'Class 0 Ratio (%)': class_0_ratio_ls
-    })
-    return class_id_ls, class_id_all, class_0_df
+    return class_id_ls, class_id_all
 
 def plot_class_id_hist(class_id_vec, class_map, save_path):
     """
@@ -143,9 +136,9 @@ def main():
     root_dir = Path(f"/home/fzhcis/mylab/data/ForestSemantic")
     pcd_paths = list(root_dir.glob('**/*.las'))
     pcd_paths.sort()
-    pcd_paths = [pcd_paths[0]]
-    class_id_ls, class_id_all, class_0_df = grab_class_id(pcd_paths)
-    prefix = "ForestSemantic_all"
+    pcd_paths = [pcd_paths[2]]
+    class_id_ls, class_id_all = grab_class_id(pcd_paths)
+    prefix = "ForestSemantic_test"
     save_path = root_dir / f"{prefix}_class_id_histogram.png"
     counts, ratios = plot_class_id_hist(class_id_all, CLASS_MAP, save_path=save_path)
     output_csv = root_dir / f"{prefix}_class_id_distribution.csv"
@@ -157,9 +150,6 @@ def main():
     })
     df.to_csv(output_csv, index=False)
     print(f"Class ID distribution saved to {output_csv}")
-    class_0_csv = root_dir / f"{prefix}_class_0_distribution.csv"
-    class_0_df.to_csv(class_0_csv, index=False)
-    print(f"Class 0 distribution saved to {class_0_csv}")
 
 if __name__ == "__main__":
     main()
