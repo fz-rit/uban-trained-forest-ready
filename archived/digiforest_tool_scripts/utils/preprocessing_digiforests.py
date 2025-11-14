@@ -96,10 +96,10 @@ def read_pt_label(file_path: Path):
     """
     data = torch.load(file_path)
     labels = data["labels"].numpy()
+    labels[labels==IGNORE_IDX] = 0 # map ignore idx to 0 for analysis
     labels = labels.astype(np.int32).reshape((-1,))
-    print(f"Shape of class_id array: {labels.shape}")
-    print(f"Type of class_id array: {labels.dtype}")
-    print(f"Unique values in class_id array: {np.unique(labels)}")
+    # print(f"Shape of class_id array: {labels.shape}")
+    # print(f"Unique values in class_id array: {np.unique(labels)}")
     return labels
 
 def process_ground_dir(raw_root: Path, out_root: Path, split_name: str):
