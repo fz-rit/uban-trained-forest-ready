@@ -9,12 +9,12 @@
     },
     "ignore_index": 255,
     "class_display_names": {
-      "1": "Forest Floor",
+      "1": "Ground",
       "2": "Tree Trunks",
       "3": "Branches & Canopy",
       "4": "Understory",
-      "5": "Objects",
-      "255": "Ignore / void"
+      "5": "Miscelaney",
+      "255": "Unlabeled"
     },
     "class_descriptions": {
       "1": "ground/terrain",
@@ -23,10 +23,6 @@
       "4": "low vegetation",
       "5": "manmade gear, poles, fences, vehicles, scanners, targets",
       "255": "void / unlabeled"
-    },
-    "height_split": {
-      "threshold_m": 2.0,
-      "desc": "vegetation with normalized height < threshold -> Understory (4); else Branches & Canopy (3)"
     }
   },
   "datasets": {
@@ -40,26 +36,24 @@
         },
         {
           "ids": [
-            3
+            2
           ],
           "to": 2
         },
         {
           "ids": [
-            2
+            3,
+            4,
+            5
           ],
-          "to": "by_height"
+          "to": 3
         },
         {
           "ids": [
-            4
+            6
           ],
-          "to": "debris_policy"
+          "to": 5
         }
-      ],
-      "debris_policy": "understory",
-      "unlabeled_ids": [
-        0
       ]
     },
     "DigiForests": {
@@ -72,21 +66,21 @@
         },
         {
           "ids": [
+            2
+          ],
+          "to": 4
+        },
+        {
+          "ids": [
             3
           ],
           "to": 2
         },
         {
           "ids": [
-            2
-          ],
-          "to": "by_height"
-        },
-        {
-          "ids": [
             4
           ],
-          "to": "debris_policy"
+          "to": 3
         },
         {
           "ids": [
@@ -95,7 +89,6 @@
           "to": 5
         }
       ],
-      "debris_policy": "understory",
       "unlabeled_ids": [
         0
       ]
@@ -111,24 +104,24 @@
         },
         {
           "ids": [
-            3,
+            3
+          ],
+          "to": 3
+        },
+        {
+          "ids": [
             4
           ],
-          "to": "by_height"
+          "to": 4
         },
         {
           "ids": [
             5,
             6,
+            7,
             8
           ],
           "to": 5
-        },
-        {
-          "ids": [
-            7
-          ],
-          "to": 255
         }
       ],
       "unlabeled_ids": [
@@ -138,29 +131,31 @@
   },
   "sample_weights": {
     "Semantic3D": {
-      "0": 2000,
-      "1": 25000,
-      "2": 120000,
-      "3": 90000,
-      "4": 45000,
-      "5": 30000,
-      "6": 55000,
-      "7": 1500,
-      "8": 5500
+      "0": 250789625,
+      "1": 1568252962,
+      "2": 809359327,
+      "3": 199539659,
+      "4": 196894634,
+      "5": 916877867,
+      "6": 143087709,
+      "7": 78790283,
+      "8": 34286149
     },
     "ForestSemantic": {
-      "1": 80000,
-      "2": 22000,
-      "3": 65000,
-      "4": 50000,
-      "5": 95000,
-      "6": 5000
+      "1": 157438935,
+      "2": 37490858,
+      "3": 10520670,
+      "4": 5156127,
+      "5": 101610856,
+      "6": 43256875
     },
     "DigiForests": {
-      "1": 40000,
-      "2": 28000,
-      "3": 18000,
-      "4": 70000
+      "0": 27849607,
+      "1": 66097135,
+      "2": 73932006,
+      "3": 37477163,
+      "4": 58111788,
+      "5": 1645028
     }
   }
 }

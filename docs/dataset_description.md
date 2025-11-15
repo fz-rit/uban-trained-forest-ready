@@ -10,6 +10,6 @@
 
 ## DigiForests
 - [dataset page](https://www.ipb.uni-bonn.de/data/digiforest-dataset/)
-- 4 classes (1-4): 1-ground, 2-shrub, 3-stem, 4-canopy; label 0 is 'unlabeled'.
-- 5 aerial (plots c1, d2, m1, m3, m5; no labels) + 6 ground plots (plots c1, d2, m1, m3, m4, m5; with labels).
+- 5 classes (1-5): 1-ground, 2-shrub, 3-stem, 4-canopy, 5-miscellaneous; label 0 is 'unlabeled'.
+- 5 aerial (plots c1, d2, m1, m3, m5; no labels) + 6 ground plots (plots c1\*3, d2\*3, m1, m3, m4, m5; with labels).
 - We can probably use the ground points for supervised fine-tuning and the aerial points for UDA.

@@ -26,7 +26,8 @@ forest_semantic = {
 }
 
 digiforests = {
-    1: "Ground", 2: "Shrub", 3: "Stem", 4: "Canopy"
+    0: "unlabeled points", 1: "Ground", 2: "Shrub", 
+    3: "Stem", 4: "Canopy", 5: "Miscellany"
 }
 
 def load_merged_labels(config_path: str = os.path.join(os.path.dirname(__file__), "class_mapping.json")) -> Dict[int, str]:
@@ -55,9 +56,9 @@ def load_merged_labels(config_path: str = os.path.join(os.path.dirname(__file__)
 merged_labels = load_merged_labels()
 
 # Mappings
-semantic3d_mapping = {0: 255, 1: 5, 2: 1, 3: 3, 4: 4, 5: 5, 6: 1, 7: 255, 8: 5}
+semantic3d_mapping = {0: 255, 1: 1, 2: 1, 3: 3, 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
 forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 5}
-digiforests_mapping = {1: 1, 2: 4, 3: 2, 4: 3}
+digiforests_mapping = {0: 255, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "class_mapping.json")
@@ -83,12 +84,29 @@ def create_sankey(weights: Optional[dict] = None, annotate_labels: bool = True):
 
     # Pre-compute merged totals for annotation
     merged_totals: dict[int, int] = {k: 0 for k in merged_labels.keys()}
+
+    missing_warning_cache: set[tuple[str, int]] = set()
+
+    def resolve(mapping: Dict[int, int], sid: int, dataset: str, fallback: int = 255) -> int:
+        """Return merged label for sid, warning once per missing id and defaulting to fallback."""
+        target = mapping.get(sid)
+        if target is None:
+            key = (dataset, sid)
+            if key not in missing_warning_cache:
+                print(f"[warn] Missing mapping for {dataset} label {sid}; defaulting to merged {fallback}.")
+                missing_warning_cache.add(key)
+            return fallback
+        return target
+
     for sid, w in w_s3d.items():
-        merged_totals[semantic3d_mapping[sid]] = merged_totals.get(semantic3d_mapping[sid], 0) + w
+        target = resolve(semantic3d_mapping, sid, "Semantic3D")
+        merged_totals[target] = merged_totals.get(target, 0) + w
     for sid, w in w_fs.items():
-        merged_totals[forest_semantic_mapping[sid]] = merged_totals.get(forest_semantic_mapping[sid], 0) + w
+        target = resolve(forest_semantic_mapping, sid, "ForestSemantic")
+        merged_totals[target] = merged_totals.get(target, 0) + w
     for sid, w in w_df.items():
-        merged_totals[digiforests_mapping[sid]] = merged_totals.get(digiforests_mapping[sid], 0) + w
+        target = resolve(digiforests_mapping, sid, "DigiForests")
+        merged_totals[target] = merged_totals.get(target, 0) + w
     
     # Semantic3D nodes (rows 0-8)
     s3d_start = 0
@@ -142,19 +160,22 @@ def create_sankey(weights: Optional[dict] = None, annotate_labels: bool = True):
     
     for i, (sid, _) in enumerate(semantic3d.items()):
         sources.append(s3d_start + i)
-        targets.append(merged_idx[semantic3d_mapping[sid]])
+        target = resolve(semantic3d_mapping, sid, "Semantic3D")
+        targets.append(merged_idx[target])
         values.append(w_s3d.get(sid, 1))
         link_colors.append('rgba(77, 182, 172, 0.4)')
     
     for i, (sid, _) in enumerate(forest_semantic.items()):
         sources.append(fs_start + i)
-        targets.append(merged_idx[forest_semantic_mapping[sid]])
+        target = resolve(forest_semantic_mapping, sid, "ForestSemantic")
+        targets.append(merged_idx[target])
         values.append(w_fs.get(sid, 1))
         link_colors.append('rgba(229, 115, 115, 0.4)')
     
     for i, (sid, _) in enumerate(digiforests.items()):
         sources.append(df_start + i)
-        targets.append(merged_idx[digiforests_mapping[sid]])
+        target = resolve(digiforests_mapping, sid, "DigiForests")
+        targets.append(merged_idx[target])
         values.append(w_df.get(sid, 1))
         link_colors.append('rgba(129, 199, 132, 0.4)')
     
