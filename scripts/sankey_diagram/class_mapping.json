@@ -7,14 +7,14 @@
       "4": "understory",
       "5": "objects"
     },
-    "ignore_index": 255,
+    "ignore_index": 0,
     "class_display_names": {
       "1": "Ground",
-      "2": "Tree Trunks",
-      "3": "Branches & Canopy",
+      "2": "Trunks",
+      "3": "Canopy",
       "4": "Understory",
-      "5": "Miscelaney",
-      "255": "Unlabeled"
+      "5": "Miscellany",
+      "0": "Unlabeled"
     },
     "class_descriptions": {
       "1": "ground/terrain",
@@ -22,7 +22,7 @@
       "3": "mid/upper canopy",
       "4": "low vegetation",
       "5": "manmade gear, poles, fences, vehicles, scanners, targets",
-      "255": "void / unlabeled"
+      "0": "void / unlabeled"
     }
   },
   "datasets": {
@@ -52,7 +52,8 @@
           "ids": [
             6
           ],
-          "to": 5
+          "to": [0, 4],
+          "note": "Conditional: height < 5m AND within ±12m on XY from center → 4 (Understory); else → 0 (Unlabeled)."
         }
       ]
     },
@@ -106,7 +107,8 @@
           "ids": [
             3
           ],
-          "to": 3
+          "to": [2, 3],
+          "note": "Conditional: height <= 0.2m → 2 (Trunk); else → 3 (Canopy)."
         },
         {
           "ids": [

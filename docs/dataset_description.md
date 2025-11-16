@@ -7,6 +7,11 @@
 - [dataset page](https://zenodo.org/records/15193973)
 - 6 classes (1-6), 0.35 billion points (train + test); there were about 0.01% points with strange label=7, which we simply ignored.
 - 3 plots; 2 for training, 1 for testing; each plot was from co-registered 5 scans.
+- Note on label 6 (conditional mapping):
+  * Label 6 is "Miscellany" in ForestSemantic, which essentially includes 'understory' points, uncertain points, and some misclassified points.
+  * When remapping, Label 6 uses a **height and position-based** conditional mapping:
+    - Points with `height < 20m` **AND** within `±12m XY range` from the point cloud center → `4` (Understory)
+    - All other label 6 points → `0` (Unlabeled)
 
 ## DigiForests
 - [dataset page](https://www.ipb.uni-bonn.de/data/digiforest-dataset/)

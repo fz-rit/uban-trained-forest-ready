@@ -2,6 +2,11 @@
 Sankey Diagram for Dataset Label Mapping
 Visualizes how labels from Semantic3D, ForestSemantic, and DigiForests map to unified labels.
 Supports optional weighting of link widths by class point counts (CSV/JSON) and label annotations.
+
+Note: Some mappings are conditional (based on height/position):
+- Semantic3D label 3: height <= 0.2m → 2 (Trunk), else → 3 (Canopy)
+- ForestSemantic label 6: height < 5m AND within ±12m XY → 4 (Understory), else → 0 (Unlabeled)
+For Sankey visualization, conditional mappings split weights across targets.
 """
 
 import argparse
@@ -15,18 +20,18 @@ import plotly.graph_objects as go
 
 # Dataset labels
 semantic3d = {
-    0: "unlabeled points", 1: "man-made terrain", 2: "natural terrain", 
+    0: "Unlabeled", 1: "man-made terrain", 2: "natural terrain", 
     3: "high vegetation", 4: "low vegetation", 5: "buildings", 
     6: "hard scape", 7: "scanning artefacts", 8: "cars"
 }
 
 forest_semantic = {
     1: "Ground", 2: "Trunk", 3: "First order branch",
-    4: "Higher order branch", 5: "Foliage", 6: "Miscellany"
+    4: "Higher order branch", 5: "Foliage", 6: "Miscellany", 7: "Unlabeled"
 }
 
 digiforests = {
-    0: "unlabeled points", 1: "Ground", 2: "Shrub", 
+    0: "Unlabeled", 1: "Ground", 2: "Shrub", 
     3: "Stem", 4: "Canopy", 5: "Miscellany"
 }
 
@@ -44,21 +49,29 @@ def load_merged_labels(config_path: str = os.path.join(os.path.dirname(__file__)
         print(f"[warn] Could not load display names from {config_path}: {e}")
     # Fallback short names
     return {
-        1: "Forest Floor",
-        2: "Tree Trunks",
-        3: "Branches & Canopy",
+        1: "Ground",
+        2: "Trunks",
+        3: "Canopy",
         4: "Understory",
-        5: "Objects",
-        255: "Ignore / void",
+        5: "Miscellany",
+        0: "Unlabeled",
     }
 
 # Load display names once
 merged_labels = load_merged_labels()
 
-# Mappings
-semantic3d_mapping = {0: 255, 1: 1, 2: 1, 3: 3, 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
-forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 5}
-digiforests_mapping = {0: 255, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
+"""
+Mappings for Sankey. Note: when a mapping value is a list (e.g. 3 -> [2,3], 6 -> [0,4]),
+we split the weight evenly across the multiple targets for visualization only,
+as Sankey doesn't have access to per-point conditions.
+
+Conditional mappings:
+- Semantic3D label 3: height <= 0.2m → 2 (Trunk), else → 3 (Canopy)
+- ForestSemantic label 6: height < 5m AND within ±12m XY → 4 (Understory), else → 0 (Unlabeled)
+"""
+semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
+digiforests_mapping = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
 
 DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "class_mapping.json")
@@ -73,7 +86,7 @@ def create_sankey(weights: Optional[dict] = None, annotate_labels: bool = True):
     
     # Colors
     ds_colors = {'Semantic3D': '#4DB6AC', 'ForestSemantic': '#E57373', 'DigiForests': '#81C784'}
-    mg_colors = {1: '#6A994E', 2: '#8B4513', 3: '#2D6A4F', 4: '#95D5B2', 5: '#FB8500', 255: '#ADB5BD'}
+    mg_colors = {0: '#ADB5BD', 1: '#6A994E', 2: '#8B4513', 3: '#2D6A4F', 4: '#95D5B2', 5: '#FB8500'}
     
     node_labels, node_colors, node_x, node_y = [], [], [], []
 
@@ -87,26 +100,35 @@ def create_sankey(weights: Optional[dict] = None, annotate_labels: bool = True):
 
     missing_warning_cache: set[tuple[str, int]] = set()
 
-    def resolve(mapping: Dict[int, int], sid: int, dataset: str, fallback: int = 255) -> int:
-        """Return merged label for sid, warning once per missing id and defaulting to fallback."""
+    def resolve_targets(mapping: Dict[int, int], sid: int, dataset: str, fallback: int = 0) -> list[int]:
+        """Return list of merged label targets for sid. If mapping returns a list,
+        treat it as a fan-out; otherwise return single-target list. Unknown ids -> [fallback]."""
         target = mapping.get(sid)
         if target is None:
             key = (dataset, sid)
             if key not in missing_warning_cache:
                 print(f"[warn] Missing mapping for {dataset} label {sid}; defaulting to merged {fallback}.")
                 missing_warning_cache.add(key)
-            return fallback
-        return target
+            return [fallback]
+        if isinstance(target, list):
+            return target
+        return [target]
 
     for sid, w in w_s3d.items():
-        target = resolve(semantic3d_mapping, sid, "Semantic3D")
-        merged_totals[target] = merged_totals.get(target, 0) + w
+        targets = resolve_targets(semantic3d_mapping, sid, "Semantic3D")
+        split = w / max(1, len(targets))
+        for t in targets:
+            merged_totals[t] = merged_totals.get(t, 0) + split
     for sid, w in w_fs.items():
-        target = resolve(forest_semantic_mapping, sid, "ForestSemantic")
-        merged_totals[target] = merged_totals.get(target, 0) + w
+        targets = resolve_targets(forest_semantic_mapping, sid, "ForestSemantic")
+        split = w / max(1, len(targets))
+        for t in targets:
+            merged_totals[t] = merged_totals.get(t, 0) + split
     for sid, w in w_df.items():
-        target = resolve(digiforests_mapping, sid, "DigiForests")
-        merged_totals[target] = merged_totals.get(target, 0) + w
+        targets = resolve_targets(digiforests_mapping, sid, "DigiForests")
+        split = w / max(1, len(targets))
+        for t in targets:
+            merged_totals[t] = merged_totals.get(t, 0) + split
     
     # Semantic3D nodes (rows 0-8)
     s3d_start = 0
@@ -159,25 +181,37 @@ def create_sankey(weights: Optional[dict] = None, annotate_labels: bool = True):
     sources, targets, values, link_colors = [], [], [], []
     
     for i, (sid, _) in enumerate(semantic3d.items()):
-        sources.append(s3d_start + i)
-        target = resolve(semantic3d_mapping, sid, "Semantic3D")
-        targets.append(merged_idx[target])
-        values.append(w_s3d.get(sid, 1))
-        link_colors.append('rgba(77, 182, 172, 0.4)')
+        src = s3d_start + i
+        w = w_s3d.get(sid, 1)
+        tlist = resolve_targets(semantic3d_mapping, sid, "Semantic3D")
+        split = w / max(1, len(tlist))
+        for t in tlist:
+            sources.append(src)
+            targets.append(merged_idx[t])
+            values.append(split)
+            link_colors.append('rgba(77, 182, 172, 0.4)')
     
     for i, (sid, _) in enumerate(forest_semantic.items()):
-        sources.append(fs_start + i)
-        target = resolve(forest_semantic_mapping, sid, "ForestSemantic")
-        targets.append(merged_idx[target])
-        values.append(w_fs.get(sid, 1))
-        link_colors.append('rgba(229, 115, 115, 0.4)')
+        src = fs_start + i
+        w = w_fs.get(sid, 1)
+        tlist = resolve_targets(forest_semantic_mapping, sid, "ForestSemantic")
+        split = w / max(1, len(tlist))
+        for t in tlist:
+            sources.append(src)
+            targets.append(merged_idx[t])
+            values.append(split)
+            link_colors.append('rgba(229, 115, 115, 0.4)')
     
     for i, (sid, _) in enumerate(digiforests.items()):
-        sources.append(df_start + i)
-        target = resolve(digiforests_mapping, sid, "DigiForests")
-        targets.append(merged_idx[target])
-        values.append(w_df.get(sid, 1))
-        link_colors.append('rgba(129, 199, 132, 0.4)')
+        src = df_start + i
+        w = w_df.get(sid, 1)
+        tlist = resolve_targets(digiforests_mapping, sid, "DigiForests")
+        split = w / max(1, len(tlist))
+        for t in tlist:
+            sources.append(src)
+            targets.append(merged_idx[t])
+            values.append(split)
+            link_colors.append('rgba(129, 199, 132, 0.4)')
     
     # Create figure
     fig = go.Figure(data=[go.Sankey(

@@ -1,4 +1,4 @@
 results/
 .conda/
 .vscode/
-outputs/
+scripts/sankey_diagram/outputs/

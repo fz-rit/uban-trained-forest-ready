@@ -2,8 +2,14 @@
 Remap labels in Semantic3D, ForestSemantic, and DigitalForest datasets to a unified label set.
 
 Label Mappings:
-- semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: 3, 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
-- forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 5, 7: 0}
+- semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+  * Label 3 uses conditional mapping based on height:
+    - If height <= 0.2m → 2 (Trunk)
+    - Otherwise → 3 (Canopy)
+- forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
+  * Label 6 uses conditional mapping based on height and position:
+    - If height < 5m AND within ±12m XY range from center → 4 (Understory)
+    - Otherwise → 0 (Unlabeled)
 - digiforests_mapping = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
 Label file formats: 
@@ -49,8 +55,8 @@ except ImportError:
 # Label Mapping Configurations
 # ============================================================================
 
-SEMANTIC3D_MAPPING = {0: 0, 1: 1, 2: 1, 3: 3, 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
-FOREST_SEMANTIC_MAPPING = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 5, 7: 0}
+SEMANTIC3D_MAPPING = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+FOREST_SEMANTIC_MAPPING = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
 DIGIFORESTS_MAPPING = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
 DATASET_CONFIGS = {
@@ -91,6 +97,34 @@ def read_semantic3d_labels(file_path: Path) -> np.ndarray:
     return labels
 
 
+def read_semantic3d_points_and_labels(label_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Read both XYZ coordinates and labels from Semantic3D files.
+    
+    Args:
+        label_path: Path to the .labels file (corresponding .txt point cloud file must exist)
+        
+    Returns:
+        Tuple of (xyz coordinates as Nx3 array, labels as 1D array)
+    """
+    # Read labels
+    labels = read_semantic3d_labels(label_path)
+    
+    # Read point cloud (.txt file with same stem as .labels file)
+    pc_path = label_path.with_suffix('.txt')
+    if not pc_path.exists():
+        raise FileNotFoundError(f"Point cloud file not found: {pc_path}")
+    
+    # Semantic3D .txt format: x y z intensity r g b
+    pc_data = pd.read_csv(pc_path, header=None, sep=r'\s+', dtype=np.float32)
+    xyz = pc_data.iloc[:, :3].values  # Extract first 3 columns (x, y, z)
+    
+    if len(xyz) != len(labels):
+        raise ValueError(f"Mismatch: {len(xyz)} points vs {len(labels)} labels")
+    
+    return xyz, labels
+
+
 def read_forestsemantic_labels(file_path: Path) -> np.ndarray:
     """
     Read labels from a ForestSemantic .las file (classification field).
@@ -104,6 +138,26 @@ def read_forestsemantic_labels(file_path: Path) -> np.ndarray:
     las = laspy.read(str(file_path))
     labels = np.array(las.classification, dtype=np.int32).reshape((-1,))
     return labels
+
+
+def read_forestsemantic_points_and_labels(file_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Read both XYZ coordinates and labels from a ForestSemantic .las file.
+    
+    Args:
+        file_path: Path to the .las file
+        
+    Returns:
+        Tuple of (xyz coordinates as Nx3 array, labels as 1D array)
+    """
+    las = laspy.read(str(file_path))
+    xyz = np.vstack([
+        las.X * las.header.scale[0] + las.header.offsets[0],
+        las.Y * las.header.scale[1] + las.header.offsets[1],
+        las.Z * las.header.scale[2] + las.header.offsets[2]
+    ]).T.astype(np.float32)
+    labels = np.array(las.classification, dtype=np.int32).reshape((-1,))
+    return xyz, labels
 
 
 def read_digiforests_labels(file_path: Path) -> np.ndarray:
@@ -168,13 +222,16 @@ def write_digiforests_labels(labels: np.ndarray, output_path: Path) -> None:
 # Remapping Functions
 # ============================================================================
 
-def remap_labels(labels: np.ndarray, mapping: Dict[int, int]) -> Tuple[np.ndarray, Dict]:
+def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, dataset: str = None) -> Tuple[np.ndarray, Dict]:
     """
     Remap labels according to the provided mapping dictionary.
+    Handles conditional mappings (list values) that require point coordinates.
     
     Args:
         labels: Original labels array
-        mapping: Dictionary mapping original labels to new labels
+        mapping: Dictionary mapping original labels to new labels (int or list for conditional)
+        xyz: Optional Nx3 array of XYZ coordinates (required for conditional mappings)
+        dataset: Optional dataset name ('semantic3d', 'forestsemantic', etc.) to determine conditional logic
         
     Returns:
         Tuple of (remapped_labels, statistics_dict)
@@ -187,7 +244,62 @@ def remap_labels(labels: np.ndarray, mapping: Dict[int, int]) -> Tuple[np.ndarra
     
     # Apply mapping
     for old_label, new_label in mapping.items():
-        remapped[labels == old_label] = new_label
+        mask = labels == old_label
+        
+        if isinstance(new_label, list):
+            # Conditional mapping - behavior depends on dataset
+            if xyz is None:
+                raise ValueError(f"Conditional mapping for label {old_label} requires XYZ coordinates")
+            
+            # Get points with this label
+            label_points = xyz[mask]
+            
+            if dataset == 'semantic3d' and old_label == 3:
+                # Semantic3D label 3 (high vegetation) conditional mapping
+                # new_label = [trunk_value, canopy_value] = [2, 3]
+                trunk_val, canopy_val = new_label[0], new_label[1]
+                
+                # Condition: height <= 0.2m → trunk, otherwise → canopy
+                height_condition = label_points[:, 2] <= 0.2
+                
+                # Create a local remapped array for this label
+                local_remapped = np.full(mask.sum(), canopy_val, dtype=np.int32)
+                local_remapped[height_condition] = trunk_val
+                
+                # Assign to global remapped array
+                remapped[mask] = local_remapped
+                
+            elif dataset == 'forestsemantic' and old_label == 6:
+                # ForestSemantic label 6 conditional mapping
+                # new_label = [unlabeled_value, understory_value] = [0, 4]
+                unlabeled_val, understory_val = new_label[0], new_label[1]
+                
+                # Compute center (XY plane)
+                center_x = label_points[:, 0].mean()
+                center_y = label_points[:, 1].mean()
+                
+                # Condition 1: under 5m high
+                height_condition = label_points[:, 2] < 5.0
+                
+                # Condition 2: within ±12m range on XY plane from center
+                dx = np.abs(label_points[:, 0] - center_x)
+                dy = np.abs(label_points[:, 1] - center_y)
+                xy_condition = (dx <= 12.0) & (dy <= 12.0)
+                
+                # Combined condition: both must be true for understory
+                understory_mask = height_condition & xy_condition
+                
+                # Create a local remapped array for this label
+                local_remapped = np.full(mask.sum(), unlabeled_val, dtype=np.int32)
+                local_remapped[understory_mask] = understory_val
+                
+                # Assign to global remapped array
+                remapped[mask] = local_remapped
+            else:
+                raise ValueError(f"Unknown conditional mapping for dataset={dataset}, label={old_label}")
+        else:
+            # Simple mapping
+            remapped[mask] = new_label
     
     # Statistics for remapped labels
     unique_remapped = np.unique(remapped)
@@ -234,6 +346,7 @@ def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False,
     print(f"Dry run: {dry_run}")
     print(f"Plot: {plot}")
     print(f"Mapping: {config['mapping']}")
+    print(f"Note: Label 3 uses conditional mapping (height <= 0.2m → 2-Trunk, else → 3-Canopy)")
     
     overall_stats = {'files_processed': 0, 'total_points': 0}
     
@@ -242,11 +355,11 @@ def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False,
     all_remapped_labels = []
     
     for label_file in tqdm(label_files, desc="Remapping Semantic3D labels", unit="file"):
-        # Read labels
-        labels = read_semantic3d_labels(label_file)
+        # Read both coordinates and labels for conditional mapping
+        xyz, labels = read_semantic3d_points_and_labels(label_file)
         
-        # Remap labels
-        remapped_labels, stats = remap_labels(labels, config['mapping'])
+        # Remap labels (passing xyz for conditional mapping of label 3)
+        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='semantic3d')
         
         # Prepare output path
         rel_path = label_file.relative_to(input_dir)
@@ -327,6 +440,7 @@ def process_forestsemantic(input_dir: Path, output_dir: Path, dry_run: bool = Fa
     print(f"Dry run: {dry_run}")
     print(f"Plot: {plot}")
     print(f"Mapping: {config['mapping']}")
+    print(f"Note: Label 6 uses conditional mapping (height < 5m & within ±12m XY from center → 4, else → 0)")
     
     overall_stats = {'files_processed': 0, 'total_points': 0}
     
@@ -335,11 +449,11 @@ def process_forestsemantic(input_dir: Path, output_dir: Path, dry_run: bool = Fa
     all_remapped_labels = []
     
     for las_file in tqdm(las_files, desc="Remapping ForestSemantic labels", unit="file"):
-        # Read labels from .las file
-        labels = read_forestsemantic_labels(las_file)
+        # Read both coordinates and labels from .las file
+        xyz, labels = read_forestsemantic_points_and_labels(las_file)
         
-        # Remap labels
-        remapped_labels, stats = remap_labels(labels, config['mapping'])
+        # Remap labels (passing xyz for conditional mapping)
+        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='forestsemantic')
         
         # Prepare output path (.las -> .labels)
         rel_path = las_file.relative_to(input_dir)
@@ -432,7 +546,7 @@ def process_digiforests(input_dir: Path, output_dir: Path, dry_run: bool = False
         labels = read_digiforests_labels(ply_file)
         
         # Remap labels
-        remapped_labels, stats = remap_labels(labels, config['mapping'])
+        remapped_labels, stats = remap_labels(labels, config['mapping'], dataset='digiforests')
         
         # Prepare output path (.ply -> .labels)
         rel_path = ply_file.relative_to(input_dir)
@@ -505,11 +619,6 @@ Examples:
   
   # Process DigiForests with plots
   python remap_labels.py --dataset digiforests --input_dir /data/digiforests --output_dir /data/output --plot
-
-Label Mappings:
-  Semantic3D:      {0: 0, 1: 1, 2: 1, 3: 3, 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
-  ForestSemantic:  {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: 5, 7: 0}
-  DigiForests:     {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
         '''
     )
     
