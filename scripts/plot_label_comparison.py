@@ -63,7 +63,7 @@ UNIFIED_LABEL_NAMES = {
     1: 'Ground',
     2: 'Trunk',
     3: 'Canopy',
-    4: 'Ground',
+    4: 'Understory',
     5: 'Misc'
 }
 

@@ -32,7 +32,6 @@ python remap_labels.py --dataset digiforests --input_dir /data/input --plot
 # Process Semantic3D with dry-run
 python scripts/remap_labels.py --dataset semantic3d --input_dir /home/fzhcis/data/semantic3d_full/Semantic3D/ --plot --output_dir /home/fzhcis/data/semantic3d_full/Semantic3D/semantic3d_remapped_labels/
 
-
 # Process ForestSemantic with plots
 python scripts/remap_labels.py --dataset forestsemantic --input_dir /home/fzhcis/data/ForestSemantic/ --plot --output_dir /home/fzhcis/data/ForestSemantic/forestsemantic_remapped_labels/
 
@@ -74,45 +73,6 @@ Provides visualization functions for comparing label distributions before and af
 
 This module is automatically imported by `remap_labels.py` when `--plot` is used.
 
-## Examples
-
-### Example 1: Remap Semantic3D labels with dry-run
-
-```bash
-python remap_labels.py \
-    --dataset semantic3d \
-    --input_dir /data/semantic3d/train \
-    --output_dir /data/output/semantic3d \
-    --dry-run
-```
-
-This will show what would be done without actually writing files.
-
-### Example 2: Remap ForestSemantic labels and generate plots
-
-```bash
-python remap_labels.py \
-    --dataset forestsemantic \
-    --input_dir /data/forestsemantic \
-    --output_dir /data/output/forestsemantic \
-    --plot
-```
-
-This will:
-1. Remap all `.las` files in the input directory
-2. Save remapped labels as `.labels` files
-3. Generate two comparison plots showing label distributions
-
-### Example 3: Remap DigiForests with default output directory
-
-```bash
-python remap_labels.py \
-    --dataset digiforests \
-    --input_dir /data/digiforests/aggregate_outputs
-```
-
-Output will be saved to `/data/digiforests/digiforests_remapped_labels/`
-
 ## Dependencies
 
 Required Python packages:
@@ -128,21 +88,7 @@ pip install numpy pandas matplotlib tqdm laspy plyfile
 - `laspy` - LAS file reading (ForestSemantic)
 - `plyfile` - PLY file reading (DigiForests)
 
-## Output Structure
 
-When processing files, the output structure mirrors the input:
-
-```
-input_dir/
-├── file1.labels (or .las/.ply)
-└── subdir/
-    └── file2.labels
-
-output_dir/
-├── file1.labels
-└── subdir/
-    └── file2.labels
-```
 
 ## Unified Label Set
 
@@ -170,10 +116,3 @@ Both plots include:
 - Color-coded bars for visual distinction
 - Grid lines for easier reading
 
-## Notes
-
-- The script preserves the directory structure from input to output
-- All label files are saved in plain text format (one label per line)
-- Progress bars show real-time processing status
-- Statistics are printed for each file and overall summary
-- Plotting requires matplotlib and only works when `--plot` flag is used
