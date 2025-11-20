@@ -16,10 +16,15 @@ Remaps labels from dataset-specific format to a unified label set.
 | **ForestSemantic** | `{1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}` |
 | **DigiForests** | `{0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}` |
 
-**Note on Semantic3D Label 3 (Conditional Mapping):**
-- Label 3 uses a **height-based** conditional mapping:
-  - Points with `height <= 0.2m` → `2` (Trunk), as the ground is typically at -1.5m due to the scanning setup
-  - All other label 3 points → `3` (Canopy)
+**Note on Semantic3D Label 3 (Conditional Mapping with TrunkDetector):**
+- Label 3 uses **geometric feature-based** conditional mapping via TrunkDetector:
+  - **Method**: PCA (Principal Component Analysis) on local neighborhoods
+  - **Features**: Linearity (λ₁-λ₂)/λ₁ and Verticality |v₁·(0,0,1)|
+  - **Classification Criteria**:
+    - Trunk (class 2): linearity > 0.8 AND verticality > 0.9 AND height ∈ [-1.5m, 5.0m]
+    - Canopy (class 3): all other points
+  - **Post-processing**: Connected component filtering (min 50 points per cluster)
+  - **Parameters**: radius=0.4m, search_method='radius'
 
 **Note on ForestSemantic Label 6 (Conditional Mapping):**
 - Label 6 uses a **height and position-based** conditional mapping:
@@ -40,7 +45,7 @@ python remap_labels.py --dataset digiforests --input_dir /data/input --plot
 
 # e.g.
 # Process Semantic3D with dry-run
-python scripts/remap_labels.py --dataset semantic3d --input_dir /home/fzhcis/data/semantic3d_full/Semantic3D/ --plot --output_dir /home/fzhcis/data/semantic3d_full/Semantic3D/semantic3d_remapped_labels/
+python scripts/remap_labels.py --dataset semantic3d --input_dir /home/fzhcis/data/semantic3d_full/Semantic3D/ --plot --output_dir /home/fzhcis/data/semantic3d_full/Semantic3D/semantic3d_remapped_labels/ --dry-run
 
 
 # Process ForestSemantic with plots

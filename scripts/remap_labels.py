@@ -3,9 +3,10 @@ Remap labels in Semantic3D, ForestSemantic, and DigitalForest datasets to a unif
 
 Label Mappings:
 - semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
-  * Label 3 uses conditional mapping based on height:
-    - If height <= 0.2m → 2 (Trunk)
-    - Otherwise → 3 (Canopy)
+  * Label 3 uses conditional mapping based on geometric features (TrunkDetector):
+    - Uses PCA-based trunk detection with linearity + verticality features
+    - Detected as trunk (class 2) if meets geometric criteria
+    - Otherwise classified as canopy (class 3)
 - forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
   * Label 6 uses conditional mapping based on height and position:
     - If height < 5m AND within ±12m XY range from center → 4 (Understory)
@@ -35,8 +36,15 @@ import laspy
 import plyfile
 from pathlib import Path
 from tqdm import tqdm
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import sys
+import os
+import warnings
+import gc
+
+# Add trunk_detection to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'trunk_detection'))
+from trunk_detection import TrunkDetector
 
 # Import plotting functions
 try:
@@ -222,7 +230,7 @@ def write_digiforests_labels(labels: np.ndarray, output_path: Path) -> None:
 # Remapping Functions
 # ============================================================================
 
-def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, dataset: str = None) -> Tuple[np.ndarray, Dict]:
+def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, dataset: str = None, trunk_detector: Optional[TrunkDetector] = None, chunk_size: int = 10_000_000) -> Tuple[np.ndarray, Dict]:
     """
     Remap labels according to the provided mapping dictionary.
     Handles conditional mappings (list values) that require point coordinates.
@@ -232,6 +240,8 @@ def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, data
         mapping: Dictionary mapping original labels to new labels (int or list for conditional)
         xyz: Optional Nx3 array of XYZ coordinates (required for conditional mappings)
         dataset: Optional dataset name ('semantic3d', 'forestsemantic', etc.) to determine conditional logic
+        trunk_detector: Optional pre-initialized TrunkDetector instance (reused across calls for performance)
+        chunk_size: Maximum points to process at once for memory efficiency (default: 10M points)
         
     Returns:
         Tuple of (remapped_labels, statistics_dict)
@@ -259,15 +269,59 @@ def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, data
                 # new_label = [trunk_value, canopy_value] = [2, 3]
                 trunk_val, canopy_val = new_label[0], new_label[1]
                 
-                # Condition: height <= 0.2m → trunk, otherwise → canopy
-                height_condition = label_points[:, 2] <= 0.2
+                # Early exit if no points with this label
+                if len(label_points) == 0:
+                    continue
                 
-                # Create a local remapped array for this label
-                local_remapped = np.full(mask.sum(), canopy_val, dtype=np.int32)
-                local_remapped[height_condition] = trunk_val
+                # Use pre-initialized TrunkDetector or create new one
+                if trunk_detector is None:
+                    trunk_detector = TrunkDetector(
+                        radius=0.4,
+                        search_method='knn',  # knn is faster than radius for large clouds
+                        k_neighbors=50,
+                        linearity_threshold=0.8,
+                        verticality_threshold=0.9,
+                        min_height=-1.5,
+                        max_height=5.0,
+                        min_cluster_size=50
+                    )
+                
+                # Process in chunks if dataset is too large (memory-efficient)
+                n_label3_points = len(label_points)
+                if n_label3_points > chunk_size:
+                    # Chunk processing for large point clouds
+                    detected_labels = np.full(n_label3_points, canopy_val, dtype=np.int32)
+                    n_chunks = (n_label3_points + chunk_size - 1) // chunk_size
+                    
+                    for i in range(n_chunks):
+                        start_idx = i * chunk_size
+                        end_idx = min((i + 1) * chunk_size, n_label3_points)
+                        chunk_points = label_points[start_idx:end_idx]
+                        chunk_labels = np.full(len(chunk_points), canopy_val, dtype=np.int32)
+                        
+                        # Detect trunks in chunk
+                        chunk_result = trunk_detector.detect_trunks(
+                            chunk_points,
+                            original_labels=chunk_labels,
+                            verbose=False
+                        )
+                        detected_labels[start_idx:end_idx] = chunk_result
+                        
+                        # Free memory immediately
+                        del chunk_points, chunk_labels, chunk_result
+                else:
+                    # Process all points at once for smaller datasets
+                    initial_labels = np.full(n_label3_points, canopy_val, dtype=np.int32)
+                    detected_labels = trunk_detector.detect_trunks(
+                        label_points, 
+                        original_labels=initial_labels,
+                        verbose=False
+                    )
+                    del initial_labels
                 
                 # Assign to global remapped array
-                remapped[mask] = local_remapped
+                remapped[mask] = detected_labels
+                del detected_labels, label_points
                 
             elif dataset == 'forestsemantic' and old_label == 6:
                 # ForestSemantic label 6 conditional mapping
@@ -346,9 +400,22 @@ def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False,
     print(f"Dry run: {dry_run}")
     print(f"Plot: {plot}")
     print(f"Mapping: {config['mapping']}")
-    print(f"Note: Label 3 uses conditional mapping (height <= 0.2m → 2-Trunk, else → 3-Canopy)")
+    print(f"Note: Label 3 uses TrunkDetector (PCA-based geometric features: linearity + verticality)")
     
     overall_stats = {'files_processed': 0, 'total_points': 0}
+    
+    # Create shared TrunkDetector instance for performance (reused across all files)
+    print("Initializing TrunkDetector (kNN with k=50)...")
+    trunk_detector = TrunkDetector(
+        radius=0.4,
+        search_method='knn',  # knn is faster than radius for large clouds
+        k_neighbors=50,
+        linearity_threshold=0.8,
+        verticality_threshold=0.9,
+        min_height=-1.5,
+        max_height=5.0,
+        min_cluster_size=50
+    )
     
     # Collect all labels for aggregated plot
     all_original_labels = []
@@ -358,8 +425,8 @@ def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False,
         # Read both coordinates and labels for conditional mapping
         xyz, labels = read_semantic3d_points_and_labels(label_file)
         
-        # Remap labels (passing xyz for conditional mapping of label 3)
-        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='semantic3d')
+        # Remap labels (passing xyz and shared detector for conditional mapping of label 3)
+        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='semantic3d', trunk_detector=trunk_detector, chunk_size=10_000_000)
         
         # Prepare output path
         rel_path = label_file.relative_to(input_dir)
@@ -378,10 +445,14 @@ def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False,
         overall_stats['files_processed'] += 1
         overall_stats['total_points'] += stats['total_points']
         
-        # Collect for plotting
+        # Collect for plotting BEFORE cleanup
         if plot and not dry_run:
             all_original_labels.append(labels)
             all_remapped_labels.append(remapped_labels)
+        
+        # Explicit memory cleanup after each file
+        del xyz, labels, remapped_labels, stats
+        gc.collect()
     
     print(f"\n{'='*80}")
     print(f"Summary:")
