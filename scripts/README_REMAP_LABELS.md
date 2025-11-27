@@ -151,6 +151,8 @@ python scripts/sanity_check_labels.py \
 
 
 # Semantic3D with specific file
+python scripts/sanity_check_labels.py   --dataset semantic3d   --point-cloud-dir /home/fzhcis/mylab/data/semantic3d/remap   --labels-dir /home/fzhcis/mylab/data/semantic3d/semantic3d_remapped_labels   --point-cloud-file sg27_station5_intensity_rgb.txt
+
 python scripts/sanity_check_labels.py   --dataset semantic3d   --point-cloud-dir /home/fzhcis/data/semantic3d_full/Semantic3D/train   --labels-dir /home/fzhcis/data/semantic3d_full/Semantic3D/semantic3d_remapped_labels/train   --point-cloud-file sg27_station5_intensity_rgb.txt
 
 # ForestSemantic example (8% subsample)

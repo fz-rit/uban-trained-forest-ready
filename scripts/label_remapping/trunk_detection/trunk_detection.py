@@ -261,19 +261,16 @@ class TrunkDetector:
         else:
             labels = np.full(n_points, 3, dtype=np.int32)
         
-        # Extract z coordinates (height)
+        # Extract z coordinates
         z = points[:, 2]
         
-        # Find minimum z (approximate ground level)
-        z_min = np.percentile(z, 1)  # Use 1st percentile to avoid outliers
-        height_above_ground = z - z_min
-        
         # Classify as trunk if all conditions are met
+        # Use absolute z values (not height above ground)
         trunk_mask = (
             (linearity > self.linearity_threshold) &
             (verticality > self.verticality_threshold) &
-            (height_above_ground >= self.min_height) &
-            (height_above_ground <= self.max_height)
+            (z >= self.min_height) &
+            (z <= self.max_height)
         )
         
         # Update labels

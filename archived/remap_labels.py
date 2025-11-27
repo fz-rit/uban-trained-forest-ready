@@ -1,135 +1,808 @@
+#!/usr/bin/env python3
+"""
+LEGACY FILE - This file is kept for backward compatibility.
 
-import argparse, json, os, glob
+For the modular version with separated concerns, see:
+- remap_labels_new.py (main entry point)
+- label_io.py (read/write functions)
+- label_remapper.py (remapping logic)
+- dataset_processor.py (processing pipelines)
+
+Remap labels in Semantic3D, ForestSemantic, and DigitalForest datasets to a unified label set.
+
+Label Mappings:
+- semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+  * Label 3 uses conditional mapping based on geometric features (TrunkDetector):
+    - Uses PCA-based trunk detection with linearity + verticality features
+    - Detected as trunk (class 2) if meets geometric criteria
+    - Otherwise classified as canopy (class 3)
+- forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
+  * Label 6 uses conditional mapping based on height and position:
+    - If height < 5m AND within ±12m XY range from center → 4 (Understory)
+    - Otherwise → 0 (Unlabeled)
+- digiforests_mapping = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
+
+Usage:
+    python remap_labels.py --dataset semantic3d --input_dir /path/to/semantic3d [--output_dir /path/to/output] [--dry-run] [--plot] [--file filename]
+"""
+
+import argparse
 import numpy as np
+import pandas as pd
+import laspy
+import plyfile
+from pathlib import Path
+from tqdm import tqdm
+from typing import Dict, List, Tuple, Optional
+import sys
+import os
+import warnings
+import gc
 
-IGNORE = 255
+# Add trunk_detection to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'trunk_detection'))
+from trunk_detection import TrunkDetector
 
-def load_npz(path):
-    d = np.load(path, allow_pickle=False)
-    pts = d["points"]
-    feats = d["feats"] if "feats" in d else None
-    labels = d["labels"].astype(np.int32) if "labels" in d else None
-    return pts, feats, labels
+# Import plotting functions
+try:
+    from plot_label_comparison import (
+        plot_before_after_histogram,
+        plot_stacked_comparison,
+        get_label_names_for_dataset
+    )
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    PLOTTING_AVAILABLE = False
+    print("⚠️  Warning: plot_label_comparison module not found. Plotting will be disabled.")
 
-def save_npz(path, points, feats, labels_meta, extra=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if feats is None:
-        np.savez_compressed(path, points=points, labels_meta=labels_meta, **(extra or {}))
-    else:
-        np.savez_compressed(path, points=points, feats=feats, labels_meta=labels_meta, **(extra or {}))
 
-def estimate_ground_z(points, cell=1.0):
-    # Estimate local ground height via XY grid min pooling + simple fill.
-    x, y, z = points[:,0], points[:,1], points[:,2]
-    xi = np.floor((x - x.min()) / cell).astype(int)
-    yi = np.floor((y - y.min()) / cell).astype(int)
-    key = xi.astype(np.int64) << 32 | yi.astype(np.int64)
-    order = np.argsort(key)
-    key_sorted = key[order]
-    z_sorted = z[order]
-    unique_keys, idx_start = np.unique(key_sorted, return_index=True)
-    mins = np.minimum.reduceat(z_sorted, idx_start)
-    zmin_map = dict(zip(unique_keys.tolist(), mins.tolist()))
-    z0 = np.array([zmin_map.get(int(k), np.min(z)) for k in key], dtype=np.float32)
-    return z0
+# ============================================================================
+# Label Mapping Configurations
+# ============================================================================
 
-def apply_rules(labels_src, z_norm, rules, debris_policy, height_th, ignore_ids):
-    out = np.full(labels_src.shape, IGNORE, dtype=np.int32)
+SEMANTIC3D_MAPPING = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+FOREST_SEMANTIC_MAPPING = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
+DIGIFORESTS_MAPPING = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
-    # ignore/unlabeled first
-    if ignore_ids:
-        for iid in ignore_ids:
-            out[labels_src == iid] = IGNORE
+DATASET_CONFIGS = {
+    'semantic3d': {
+        'mapping': SEMANTIC3D_MAPPING,
+        'file_extension': '.labels',
+        'output_dir_name': 'semantic3d_remapped_labels'
+    },
+    'forestsemantic': {
+        'mapping': FOREST_SEMANTIC_MAPPING,
+        'file_extension': '.las',
+        'output_dir_name': 'forestsemantic_remapped_labels'
+    },
+    'digiforests': {
+        'mapping': DIGIFORESTS_MAPPING,
+        'file_extension': '.ply',
+        'output_dir_name': 'digiforests_remapped_labels'
+    }
+}
 
-    for rule in rules:
-        ids = rule.get("ids", [])
-        to = rule["to"]
-        if not ids:
-            continue
-        m = np.zeros_like(labels_src, dtype=bool)
-        for i in ids:
-            m |= (labels_src == i)
-        if to == "by_height":
-            out[m & (z_norm < height_th)] = 4  # Understory
-            out[m & (z_norm >= height_th)] = 3 # Branches & Canopy
-        elif to == "debris_policy":
-            if debris_policy == "understory":
-                out[m] = 4
-            elif debris_policy == "forest_floor":
-                out[m] = 1
+
+# ============================================================================
+# Core Functions for Reading Labels
+# ============================================================================
+
+def read_semantic3d_labels(file_path: Path) -> np.ndarray:
+    """
+    Read a Semantic3D .labels file and return a numpy array of class IDs.
+    
+    Args:
+        file_path: Path to the .labels file
+        
+    Returns:
+        1D numpy array of integer labels
+    """
+    labels = pd.read_csv(file_path, header=None, sep=r'\s+', dtype=np.int32).values
+    labels = labels.reshape((-1,))
+    return labels
+
+
+def read_semantic3d_points_and_labels(label_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Read both XYZ coordinates and labels from Semantic3D files.
+    
+    Args:
+        label_path: Path to the .labels file (corresponding .txt point cloud file must exist)
+        
+    Returns:
+        Tuple of (xyz coordinates as Nx3 array, labels as 1D array)
+    """
+    # Read labels
+    labels = read_semantic3d_labels(label_path)
+    
+    # Read point cloud (.txt file with same stem as .labels file)
+    pc_path = label_path.with_suffix('.txt')
+    if not pc_path.exists():
+        raise FileNotFoundError(f"Point cloud file not found: {pc_path}")
+    
+    # Semantic3D .txt format: x y z intensity r g b
+    pc_data = pd.read_csv(pc_path, header=None, sep=r'\s+', dtype=np.float32)
+    xyz = pc_data.iloc[:, :3].values  # Extract first 3 columns (x, y, z)
+    
+    if len(xyz) != len(labels):
+        raise ValueError(f"Mismatch: {len(xyz)} points vs {len(labels)} labels")
+    
+    return xyz, labels
+
+
+def read_forestsemantic_labels(file_path: Path) -> np.ndarray:
+    """
+    Read labels from a ForestSemantic .las file (classification field).
+    
+    Args:
+        file_path: Path to the .las file
+        
+    Returns:
+        1D numpy array of integer labels
+    """
+    las = laspy.read(str(file_path))
+    labels = np.array(las.classification, dtype=np.int32).reshape((-1,))
+    return labels
+
+
+def read_forestsemantic_points_and_labels(file_path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Read both XYZ coordinates and labels from a ForestSemantic .las file.
+    
+    Args:
+        file_path: Path to the .las file
+        
+    Returns:
+        Tuple of (xyz coordinates as Nx3 array, labels as 1D array)
+    """
+    las = laspy.read(str(file_path))
+    xyz = np.vstack([
+        las.X * las.header.scale[0] + las.header.offsets[0],
+        las.Y * las.header.scale[1] + las.header.offsets[1],
+        las.Z * las.header.scale[2] + las.header.offsets[2]
+    ]).T.astype(np.float32)
+    labels = np.array(las.classification, dtype=np.int32).reshape((-1,))
+    return xyz, labels
+
+
+def read_digiforests_labels(file_path: Path) -> np.ndarray:
+    """
+    Read labels from a DigiForests .ply file (semantics field).
+    
+    Args:
+        file_path: Path to the .ply file
+        
+    Returns:
+        1D numpy array of integer labels
+    """
+    plydata = plyfile.PlyData.read(str(file_path))
+    labels = np.array(plydata['vertex'].data['semantics'], dtype=np.int32)
+    return labels
+
+
+# ============================================================================
+# Core Functions for Writing Labels
+# ============================================================================
+
+def write_semantic3d_labels(labels: np.ndarray, output_path: Path) -> None:
+    """
+    Write remapped labels to a Semantic3D .labels file.
+    
+    Args:
+        labels: 1D numpy array of remapped labels
+        output_path: Path to save the .labels file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(labels)
+    df.to_csv(output_path, header=False, index=False, sep=' ')
+
+
+def write_forestsemantic_labels(labels: np.ndarray, output_path: Path) -> None:
+    """
+    Write remapped labels to a .labels file for ForestSemantic.
+    
+    Args:
+        labels: 1D numpy array of remapped labels
+        output_path: Path to save the .labels file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(labels)
+    df.to_csv(output_path, header=False, index=False, sep=' ')
+
+
+def write_digiforests_labels(labels: np.ndarray, output_path: Path) -> None:
+    """
+    Write remapped labels to a .labels file for DigiForests.
+    
+    Args:
+        labels: 1D numpy array of remapped labels
+        output_path: Path to save the .labels file
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(labels)
+    df.to_csv(output_path, header=False, index=False, sep=' ')
+
+
+# ============================================================================
+# Remapping Functions
+# ============================================================================
+
+def remap_labels(labels: np.ndarray, mapping: Dict, xyz: np.ndarray = None, dataset: str = None, trunk_detector: Optional[TrunkDetector] = None, chunk_size: int = 10_000_000) -> Tuple[np.ndarray, Dict]:
+    """
+    Remap labels according to the provided mapping dictionary.
+    Handles conditional mappings (list values) that require point coordinates.
+    
+    Args:
+        labels: Original labels array
+        mapping: Dictionary mapping original labels to new labels (int or list for conditional)
+        xyz: Optional Nx3 array of XYZ coordinates (required for conditional mappings)
+        dataset: Optional dataset name ('semantic3d', 'forestsemantic', etc.) to determine conditional logic
+        trunk_detector: Optional pre-initialized TrunkDetector instance (reused across calls for performance)
+        chunk_size: Maximum points to process at once for memory efficiency (default: 10M points)
+        
+    Returns:
+        Tuple of (remapped_labels, statistics_dict)
+    """
+    remapped = labels.copy()
+    
+    # Collect statistics
+    unique_original = np.unique(labels)
+    original_counts = {int(label): int(np.sum(labels == label)) for label in unique_original}
+    
+    # Apply mapping
+    for old_label, new_label in mapping.items():
+        mask = labels == old_label
+        
+        if isinstance(new_label, list):
+            # Conditional mapping - behavior depends on dataset
+            if xyz is None:
+                raise ValueError(f"Conditional mapping for label {old_label} requires XYZ coordinates")
+            
+            # Get points with this label
+            label_points = xyz[mask]
+            
+            if dataset == 'semantic3d' and old_label == 3:
+                # Semantic3D label 3 (high vegetation) conditional mapping
+                # new_label = [trunk_value, canopy_value] = [2, 3]
+                trunk_val, canopy_val = new_label[0], new_label[1]
+                
+                # Early exit if no points with this label
+                if len(label_points) == 0:
+                    continue
+                
+                # Use pre-initialized TrunkDetector or create new one
+                if trunk_detector is None:
+                    trunk_detector = TrunkDetector(
+                        radius=0.4,
+                        search_method='radius',
+                        linearity_threshold=0.8,
+                        verticality_threshold=0.9,
+                        min_height=-1.5,
+                        max_height=5.0,
+                        min_cluster_size=50
+                    )
+                
+                # Process in chunks if dataset is too large (memory-efficient)
+                n_label3_points = len(label_points)
+                if n_label3_points > chunk_size:
+                    # Chunk processing for large point clouds
+                    detected_labels = np.full(n_label3_points, canopy_val, dtype=np.int32)
+                    n_chunks = (n_label3_points + chunk_size - 1) // chunk_size
+                    
+                    for i in range(n_chunks):
+                        start_idx = i * chunk_size
+                        end_idx = min((i + 1) * chunk_size, n_label3_points)
+                        chunk_points = label_points[start_idx:end_idx]
+                        chunk_labels = np.full(len(chunk_points), canopy_val, dtype=np.int32)
+                        
+                        # Detect trunks in chunk
+                        chunk_result = trunk_detector.detect_trunks(
+                            chunk_points,
+                            original_labels=chunk_labels,
+                            verbose=False
+                        )
+                        detected_labels[start_idx:end_idx] = chunk_result
+                        
+                        # Free memory immediately
+                        del chunk_points, chunk_labels, chunk_result
+                else:
+                    # Process all points at once for smaller datasets
+                    initial_labels = np.full(n_label3_points, canopy_val, dtype=np.int32)
+                    detected_labels = trunk_detector.detect_trunks(
+                        label_points, 
+                        original_labels=initial_labels,
+                        verbose=False
+                    )
+                    del initial_labels
+                
+                # Assign to global remapped array
+                remapped[mask] = detected_labels
+                del detected_labels, label_points
+                
+            elif dataset == 'forestsemantic' and old_label == 6:
+                # ForestSemantic label 6 conditional mapping
+                # new_label = [unlabeled_value, understory_value] = [0, 4]
+                unlabeled_val, understory_val = new_label[0], new_label[1]
+                
+                # Compute center (XY plane)
+                center_x = label_points[:, 0].mean()
+                center_y = label_points[:, 1].mean()
+                
+                # Condition 1: under 5m high
+                height_condition = label_points[:, 2] < 5.0
+                
+                # Condition 2: within ±12m range on XY plane from center
+                dx = np.abs(label_points[:, 0] - center_x)
+                dy = np.abs(label_points[:, 1] - center_y)
+                xy_condition = (dx <= 12.0) & (dy <= 12.0)
+                
+                # Combined condition: both must be true for understory
+                understory_mask = height_condition & xy_condition
+                
+                # Create a local remapped array for this label
+                local_remapped = np.full(mask.sum(), unlabeled_val, dtype=np.int32)
+                local_remapped[understory_mask] = understory_val
+                
+                # Assign to global remapped array
+                remapped[mask] = local_remapped
             else:
-                out[m] = IGNORE
-        elif to == 255:
-            out[m] = IGNORE
+                raise ValueError(f"Unknown conditional mapping for dataset={dataset}, label={old_label}")
         else:
-            out[m] = int(to)
+            # Simple mapping
+            remapped[mask] = new_label
+    
+    # Statistics for remapped labels
+    unique_remapped = np.unique(remapped)
+    remapped_counts = {int(label): int(np.sum(remapped == label)) for label in unique_remapped}
+    
+    stats = {
+        'original_unique': list(unique_original),
+        'original_counts': original_counts,
+        'remapped_unique': list(unique_remapped),
+        'remapped_counts': remapped_counts,
+        'total_points': len(labels)
+    }
+    
+    return remapped, stats
 
-    return out
+
+# ============================================================================
+# Dataset-Specific Processing Functions
+# ============================================================================
+
+def process_semantic3d(input_dir: Path, output_dir: Path, dry_run: bool = False, plot: bool = False, specific_file: Optional[str] = None) -> None:
+    """
+    Process Semantic3D dataset: remap .labels files.
+    
+    Args:
+        input_dir: Directory containing .labels files
+        output_dir: Directory to save remapped .labels files
+        dry_run: If True, only print what would be done without writing files
+        plot: If True, generate before/after comparison plots
+        specific_file: Optional specific filename to process (relative to input_dir)
+    """
+    config = DATASET_CONFIGS['semantic3d']
+    
+    if specific_file:
+        # Process only the specified file
+        label_file = input_dir / specific_file
+        if not label_file.exists():
+            print(f"❌ Error: File not found: {label_file}")
+            return
+        if not str(label_file).endswith(config["file_extension"]):
+            print(f"❌ Error: File must have {config['file_extension']} extension")
+            return
+        label_files = [label_file]
+    else:
+        # Process all files
+        label_files = sorted(list(input_dir.glob(f'**/*{config["file_extension"]}')))
+    
+    if len(label_files) == 0:
+        print(f"⚠️  No .labels files found in {input_dir}")
+        return
+    
+    print(f"\n{'='*80}")
+    print(f"Processing Semantic3D Dataset")
+    print(f"{'='*80}")
+    print(f"Input directory: {input_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Found {len(label_files)} .labels files")
+    print(f"Dry run: {dry_run}")
+    print(f"Plot: {plot}")
+    print(f"Mapping: {config['mapping']}")
+    print(f"Note: Label 3 uses TrunkDetector (PCA-based geometric features: linearity + verticality)")
+    
+    overall_stats = {'files_processed': 0, 'total_points': 0}
+    
+    # Create shared TrunkDetector instance for performance (reused across all files)
+    print("Initializing TrunkDetector (radius=0.4)...")
+    trunk_detector = TrunkDetector(
+        radius=0.4,
+        search_method='radius',
+        linearity_threshold=0.8,
+        verticality_threshold=0.9,
+        min_height=-1.5,
+        max_height=5.0,
+        min_cluster_size=50
+    )
+    
+    # Collect all labels for aggregated plot
+    all_original_labels = []
+    all_remapped_labels = []
+    
+    for label_file in tqdm(label_files, desc="Remapping Semantic3D labels", unit="file"):
+        # Read both coordinates and labels for conditional mapping
+        xyz, labels = read_semantic3d_points_and_labels(label_file)
+        
+        # Remap labels (passing xyz and shared detector for conditional mapping of label 3)
+        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='semantic3d', trunk_detector=trunk_detector, chunk_size=10_000_000)
+        
+        # Prepare output path
+        rel_path = label_file.relative_to(input_dir)
+        output_path = output_dir / rel_path
+        
+        # Print statistics for this file
+        if dry_run:
+            print(f"\n[DRY RUN] Would process: {label_file.name}")
+            print(f"  Original labels: {stats['original_unique']}")
+            print(f"  Remapped labels: {stats['remapped_unique']}")
+            print(f"  Total points: {stats['total_points']:,}")
+            print(f"  Would save to: {output_path}")
+        else:
+            write_semantic3d_labels(remapped_labels, output_path)
+        
+        overall_stats['files_processed'] += 1
+        overall_stats['total_points'] += stats['total_points']
+        
+        # Collect for plotting BEFORE cleanup
+        if plot and not dry_run:
+            all_original_labels.append(labels)
+            all_remapped_labels.append(remapped_labels)
+        
+        # Explicit memory cleanup after each file
+        del xyz, labels, remapped_labels, stats
+        gc.collect()
+    
+    print(f"\n{'='*80}")
+    print(f"Summary:")
+    print(f"  Files processed: {overall_stats['files_processed']}")
+    print(f"  Total points: {overall_stats['total_points']:,}")
+    print(f"{'='*80}\n")
+    
+    # Generate plots
+    if plot and not dry_run and PLOTTING_AVAILABLE and len(all_original_labels) > 0:
+        print("\n📊 Generating comparison plots...")
+        all_original = np.concatenate(all_original_labels)
+        all_remapped = np.concatenate(all_remapped_labels)
+        
+        original_names, remapped_names = get_label_names_for_dataset('semantic3d')
+        
+        # Side-by-side plot
+        plot_path_side = output_dir / "label_comparison_sidebyside.png"
+        plot_before_after_histogram(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "Semantic3D", plot_path_side
+        )
+        
+        # Stacked plot
+        plot_path_stacked = output_dir / "label_comparison_stacked.png"
+        plot_stacked_comparison(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "Semantic3D", plot_path_stacked
+        )
+
+
+def process_forestsemantic(input_dir: Path, output_dir: Path, dry_run: bool = False, plot: bool = False, specific_file: Optional[str] = None) -> None:
+    """
+    Process ForestSemantic dataset: remap labels from .las files.
+    
+    Args:
+        input_dir: Directory containing .las files
+        output_dir: Directory to save remapped .labels files
+        dry_run: If True, only print what would be done without writing files
+        plot: If True, generate before/after comparison plots
+        specific_file: Optional specific filename to process (relative to input_dir)
+    """
+    config = DATASET_CONFIGS['forestsemantic']
+    
+    if specific_file:
+        # Process only the specified file
+        las_file = input_dir / specific_file
+        if not las_file.exists():
+            print(f"❌ Error: File not found: {las_file}")
+            return
+        if not str(las_file).endswith(config["file_extension"]):
+            print(f"❌ Error: File must have {config['file_extension']} extension")
+            return
+        las_files = [las_file]
+    else:
+        # Process all files
+        las_files = sorted(list(input_dir.glob(f'**/*{config["file_extension"]}')))
+    
+    if len(las_files) == 0:
+        print(f"⚠️  No .las files found in {input_dir}")
+        return
+    
+    print(f"\n{'='*80}")
+    print(f"Processing ForestSemantic Dataset")
+    print(f"{'='*80}")
+    print(f"Input directory: {input_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Found {len(las_files)} .las files")
+    print(f"Dry run: {dry_run}")
+    print(f"Plot: {plot}")
+    print(f"Mapping: {config['mapping']}")
+    print(f"Note: Label 6 uses conditional mapping (height < 5m & within ±12m XY from center → 4, else → 0)")
+    
+    overall_stats = {'files_processed': 0, 'total_points': 0}
+    
+    # Collect all labels for aggregated plot
+    all_original_labels = []
+    all_remapped_labels = []
+    
+    for las_file in tqdm(las_files, desc="Remapping ForestSemantic labels", unit="file"):
+        # Read both coordinates and labels from .las file
+        xyz, labels = read_forestsemantic_points_and_labels(las_file)
+        
+        # Remap labels (passing xyz for conditional mapping)
+        remapped_labels, stats = remap_labels(labels, config['mapping'], xyz=xyz, dataset='forestsemantic')
+        
+        # Prepare output path (.las -> .labels)
+        rel_path = las_file.relative_to(input_dir)
+        output_path = output_dir / rel_path.with_suffix('.labels')
+        
+        # Print statistics for this file
+        if dry_run:
+            print(f"\n[DRY RUN] Would process: {las_file.name}")
+            print(f"  Original labels: {stats['original_unique']}")
+            print(f"  Remapped labels: {stats['remapped_unique']}")
+            print(f"  Total points: {stats['total_points']:,}")
+            print(f"  Would save to: {output_path}")
+        else:
+            write_forestsemantic_labels(remapped_labels, output_path)
+        
+        overall_stats['files_processed'] += 1
+        overall_stats['total_points'] += stats['total_points']
+        
+        # Collect for plotting
+        if plot and not dry_run:
+            all_original_labels.append(labels)
+            all_remapped_labels.append(remapped_labels)
+    
+    print(f"\n{'='*80}")
+    print(f"Summary:")
+    print(f"  Files processed: {overall_stats['files_processed']}")
+    print(f"  Total points: {overall_stats['total_points']:,}")
+    print(f"{'='*80}\n")
+    
+    # Generate plots
+    if plot and not dry_run and PLOTTING_AVAILABLE and len(all_original_labels) > 0:
+        print("\n📊 Generating comparison plots...")
+        all_original = np.concatenate(all_original_labels)
+        all_remapped = np.concatenate(all_remapped_labels)
+        
+        original_names, remapped_names = get_label_names_for_dataset('forestsemantic')
+        
+        # Side-by-side plot
+        plot_path_side = output_dir / "label_comparison_sidebyside.png"
+        plot_before_after_histogram(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "ForestSemantic", plot_path_side
+        )
+        
+        # Stacked plot
+        plot_path_stacked = output_dir / "label_comparison_stacked.png"
+        plot_stacked_comparison(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "ForestSemantic", plot_path_stacked
+        )
+
+
+def process_digiforests(input_dir: Path, output_dir: Path, dry_run: bool = False, plot: bool = False, specific_file: Optional[str] = None) -> None:
+    """
+    Process DigiForests dataset: remap labels from .ply files.
+    
+    Args:
+        input_dir: Directory containing .ply files
+        output_dir: Directory to save remapped .labels files
+        dry_run: If True, only print what would be done without writing files
+        plot: If True, generate before/after comparison plots
+        specific_file: Optional specific filename to process (relative to input_dir)
+    """
+    config = DATASET_CONFIGS['digiforests']
+    
+    if specific_file:
+        # Process only the specified file
+        ply_file = input_dir / specific_file
+        if not ply_file.exists():
+            print(f"❌ Error: File not found: {ply_file}")
+            return
+        if not str(ply_file).endswith(config["file_extension"]):
+            print(f"❌ Error: File must have {config['file_extension']} extension")
+            return
+        ply_files = [ply_file]
+    else:
+        # Process all files
+        ply_files = sorted(list(input_dir.glob(f'**/*{config["file_extension"]}')))
+    
+    if len(ply_files) == 0:
+        print(f"⚠️  No .ply files found in {input_dir}")
+        return
+    
+    print(f"\n{'='*80}")
+    print(f"Processing DigiForests Dataset")
+    print(f"{'='*80}")
+    print(f"Input directory: {input_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Found {len(ply_files)} .ply files")
+    print(f"Dry run: {dry_run}")
+    print(f"Plot: {plot}")
+    print(f"Mapping: {config['mapping']}")
+    
+    overall_stats = {'files_processed': 0, 'total_points': 0}
+    
+    # Collect all labels for aggregated plot
+    all_original_labels = []
+    all_remapped_labels = []
+    
+    for ply_file in tqdm(ply_files, desc="Remapping DigiForests labels", unit="file"):
+        # Read labels from .ply file
+        labels = read_digiforests_labels(ply_file)
+        
+        # Remap labels
+        remapped_labels, stats = remap_labels(labels, config['mapping'], dataset='digiforests')
+        
+        # Prepare output path (.ply -> .labels)
+        rel_path = ply_file.relative_to(input_dir)
+        output_path = output_dir / rel_path.with_suffix('.labels')
+        
+        # Print statistics for this file
+        if dry_run:
+            print(f"\n[DRY RUN] Would process: {ply_file.name}")
+            print(f"  Original labels: {stats['original_unique']}")
+            print(f"  Remapped labels: {stats['remapped_unique']}")
+            print(f"  Total points: {stats['total_points']:,}")
+            print(f"  Would save to: {output_path}")
+        else:
+            write_digiforests_labels(remapped_labels, output_path)
+        
+        overall_stats['files_processed'] += 1
+        overall_stats['total_points'] += stats['total_points']
+        
+        # Collect for plotting
+        if plot and not dry_run:
+            all_original_labels.append(labels)
+            all_remapped_labels.append(remapped_labels)
+    
+    print(f"\n{'='*80}")
+    print(f"Summary:")
+    print(f"  Files processed: {overall_stats['files_processed']}")
+    print(f"  Total points: {overall_stats['total_points']:,}")
+    print(f"{'='*80}\n")
+    
+    # Generate plots
+    if plot and not dry_run and PLOTTING_AVAILABLE and len(all_original_labels) > 0:
+        print("\n📊 Generating comparison plots...")
+        all_original = np.concatenate(all_original_labels)
+        all_remapped = np.concatenate(all_remapped_labels)
+        
+        original_names, remapped_names = get_label_names_for_dataset('digiforests')
+        
+        # Side-by-side plot
+        plot_path_side = output_dir / "label_comparison_sidebyside.png"
+        plot_before_after_histogram(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "DigiForests", plot_path_side
+        )
+        
+        # Stacked plot
+        plot_path_stacked = output_dir / "label_comparison_stacked.png"
+        plot_stacked_comparison(
+            all_original, all_remapped,
+            original_names, remapped_names,
+            "DigiForests", plot_path_stacked
+        )
+
+
+# ============================================================================
+# Main CLI
+# ============================================================================
 
 def main():
-    ap = argparse.ArgumentParser(description="Remap labels to HF-aligned 5 classes.")
-    ap.add_argument("--mapping_json", required=True)
-    ap.add_argument("--dataset", required=True, choices=["ForestSemantic","DigiForests","Semantic3D"])
-    ap.add_argument("--in_dir", required=True)
-    ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--glob", default="*.npz")
-    ap.add_argument("--grid", type=float, default=1.0, help="XY grid size (m) for ground estimation")
-    ap.add_argument("--height_th", type=float, default=None, help="override height split threshold (m)")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description='Remap labels for Semantic3D, ForestSemantic, and DigiForests datasets to a unified label set.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Process Semantic3D dataset
+  python remap_labels.py --dataset semantic3d --input_dir /data/semantic3d/train --output_dir /data/output
+  
+  # Process ForestSemantic with dry-run
+  python remap_labels.py --dataset forestsemantic --input_dir /data/forestsemantic --output_dir /data/output --dry-run
+  
+  # Process DigiForests with plots
+  python remap_labels.py --dataset digiforests --input_dir /data/digiforests --output_dir /data/output --plot
+  
+  # Process a specific file only
+  python remap_labels.py --dataset semantic3d --input_dir /data/semantic3d/train --file "scene01.labels"
+        '''
+    )
+    
+    parser.add_argument(
+        '--dataset',
+        type=str,
+        required=True,
+        choices=['semantic3d', 'forestsemantic', 'digiforests'],
+        help='Dataset to process'
+    )
+    
+    parser.add_argument(
+        '--input_dir',
+        type=str,
+        required=True,
+        help='Input directory containing label files'
+    )
+    
+    parser.add_argument(
+        '--output_dir',
+        type=str,
+        required=False,
+        help='Output directory for remapped labels (default: <input_dir>/<dataset>_remapped_labels)'
+    )
+    
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show what would be done without actually writing files'
+    )
+    
+    parser.add_argument(
+        '--plot',
+        action='store_true',
+        help='Generate before/after comparison plots for label distributions'
+    )
+    
+    parser.add_argument(
+        '--file',
+        type=str,
+        required=False,
+        help='Process only a specific file (relative path from input_dir, e.g., "myfile.labels" or "subdir/myfile.las")'
+    )
+    
+    args = parser.parse_args()
+    
+    # Validate input directory
+    input_dir = Path(args.input_dir)
+    if not input_dir.exists():
+        print(f"❌ Error: Input directory does not exist: {input_dir}")
+        sys.exit(1)
+    
+    # Set output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        config = DATASET_CONFIGS[args.dataset]
+        output_dir = input_dir.parent / config['output_dir_name']
+    
+    # Process dataset
+    if args.dataset == 'semantic3d':
+        process_semantic3d(input_dir, output_dir, args.dry_run, args.plot, args.file)
+    elif args.dataset == 'forestsemantic':
+        process_forestsemantic(input_dir, output_dir, args.dry_run, args.plot, args.file)
+    elif args.dataset == 'digiforests':
+        process_digiforests(input_dir, output_dir, args.dry_run, args.plot, args.file)
+    
+    if not args.dry_run:
+        print(f"✅ Remapped labels saved to: {output_dir}")
+    else:
+        print(f"\n✅ Dry run completed. No files were written.")
 
-    with open(args.mapping_json, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-
-    ds_cfg = cfg["datasets"][args.dataset]
-    rules = ds_cfg["rules"]
-    debris_policy = ds_cfg.get("debris_policy", "understory")
-    ignore_ids = ds_cfg.get("unlabeled_ids", [])
-    default_th = cfg["meta"]["height_split"]["threshold_m"]
-    height_th = args.height_th if args.height_th is not None else default_th
-
-    files = sorted(glob.glob(os.path.join(args.in_dir, args.glob)))
-    if not files:
-        print("No files matched:", os.path.join(args.in_dir, args.glob))
-        return
-
-    total_counts = np.zeros(256, dtype=np.int64)
-    meta_counts = np.zeros(256, dtype=np.int64)
-
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    for fpath in files:
-        pts, feats, labels_src = load_npz(fpath)
-        if labels_src is None:
-            print("Skip (no labels):", fpath)
-            continue
-
-        z0 = estimate_ground_z(pts, cell=args.grid)
-        z_norm = pts[:,2] - z0
-
-        labels_meta = apply_rules(labels_src, z_norm, rules, debris_policy, height_th, ignore_ids)
-
-        binc_src = np.bincount(labels_src.clip(0,255), minlength=256)
-        binc_meta = np.bincount(labels_meta.clip(0,255), minlength=256)
-        total_counts += binc_src
-        meta_counts += binc_meta
-
-        rel = os.path.basename(fpath)
-        out_f = os.path.join(args.out_dir, rel)
-        save_npz(out_f, pts.astype(np.float32), feats.astype(np.float32) if feats is not None else None, labels_meta.astype(np.int32))
-
-        src_nonzero = {i:int(c) for i,c in enumerate(binc_src) if c>0}
-        meta_nonzero = {i:int(c) for i,c in enumerate(binc_meta) if c>0}
-        print(f"[OK] {rel}")
-        print("  src:", src_nonzero)
-        print("  meta:", meta_nonzero)
-
-    print("\n=== SUMMARY (all files) ===")
-    src_nonzero = {i:int(c) for i,c in enumerate(total_counts) if c>0}
-    meta_nonzero = {i:int(c) for i,c in enumerate(meta_counts) if c>0}
-    print("Raw src label totals:", src_nonzero)
-    print("Meta (HF 5-class) totals:", {i:int(meta_nonzero.get(i,0)) for i in [1,2,3,4,5,255]})
-    print("Use ignore_index=255 in your loss.")
-    print("Done.")
 
 if __name__ == "__main__":
     main()
+

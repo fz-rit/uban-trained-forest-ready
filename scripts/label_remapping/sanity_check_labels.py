@@ -31,6 +31,12 @@ Usage examples:
         --labels-dir /data/semantic3d_remapped_labels/ \
         --point-cloud-file bildstein_station1_xyz_intensity_rgb.txt
 
+        
+    python sanity_check_labels.py --dataset semantic3d \
+        --point-cloud-dir /home/fzhcis/mylab/data/semantic3d/remap \
+        --labels-dir /home/fzhcis/mylab/data/semantic3d/semantic3d_remapped_labels \
+        --point-cloud-file sg27_station5_intensity_rgb.txt
+
     python sanity_check_labels.py --dataset forestsemantic \
         --point-cloud-dir /data/forestsemantic/ \
         --labels-dir /data/forestsemantic_remapped_labels/ \
