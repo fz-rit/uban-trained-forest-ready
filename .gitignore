@@ -2,3 +2,4 @@ results/
 .conda/
 .vscode/
 scripts/sankey_diagram/outputs/
+*__pycache__*/

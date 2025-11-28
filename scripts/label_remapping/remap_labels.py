@@ -3,7 +3,7 @@
 Remap labels in Semantic3D, ForestSemantic, and DigitalForest datasets to a unified label set.
 
 Label Mappings:
-- semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+- semantic3d_mapping = {0: 0, 1: 0, 2: 1, 3: [2, 3], 4: 4, 5: 0, 6: 5, 7: 0, 8: 5}
   * Label 3 uses conditional mapping based on geometric features (TrunkDetector)
 - forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
   * Label 6 uses conditional mapping based on height and position
@@ -26,7 +26,7 @@ from dataset_processor import process_semantic3d, process_forestsemantic, proces
 
 DATASET_CONFIGS = {
     'semantic3d': {
-        'mapping': {0: 0, 1: 0, 2: 1, 3: [2, 3], 4: 4, 5: 0, 6: 0, 7: 0, 8: 5},
+        'mapping': {0: 0, 1: 0, 2: 1, 3: [2, 3], 4: 4, 5: 0, 6: 5, 7: 0, 8: 5},
         'file_extension': '.labels',
         'output_dir_name': 'semantic3d_remapped_labels',
         'processor': process_semantic3d
@@ -125,7 +125,7 @@ Examples:
     parser.add_argument(
         '--chunk-size',
         type=int,
-        default=100_000,
+        default=100000,
         help='Max label-3 points to process per chunk (Semantic3D). Set 0 to disable chunking.'
     )
     

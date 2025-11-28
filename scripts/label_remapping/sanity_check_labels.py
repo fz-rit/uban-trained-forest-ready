@@ -245,7 +245,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--point-cloud-dir", required=True, type=str, help="Directory containing point cloud files")
     parser.add_argument("--labels-dir", required=True, type=str, help="Directory containing remapped .labels files")
     parser.add_argument("--point-cloud-file", type=str, default=None, help="Specific point cloud filename (e.g., 'file.txt'). If provided, uses this file instead of random selection.")
-    parser.add_argument("--sample-fraction", type=float, default=0.07, help="Fraction of points to subsample (recommend 0.05–0.10)")
+    parser.add_argument("--sample-fraction", type=float, default=0.10, help="Fraction of points to subsample (recommend 0.05–0.10)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (affects both file selection and subsampling)")
     return parser.parse_args()
 
