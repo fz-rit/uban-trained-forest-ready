@@ -14,12 +14,12 @@ from tqdm import tqdm
 
 # Add trunk_detection to path
 CURRENT_DIR = Path(__file__).resolve().parent
-TRUNK_DIR = CURRENT_DIR / 'trunk_detection'
+TRUNK_DIR = CURRENT_DIR / 'semantic3d_trunk_detection'
 if str(TRUNK_DIR) not in sys.path:
     sys.path.insert(0, str(TRUNK_DIR))
 
-from trunk_detection import TrunkDetector
-# Note: TorchTrunkDetector is imported conditionally
+# from trunk_detection import TrunkDetector
+from trunk_detection_torch_projection import TorchTrunkDetector
 
 from label_io import (
     read_semantic3d_points_and_labels,
@@ -45,6 +45,9 @@ def save_to_las(
     """
     Save original labels, remapped labels, and optional extra features to LAS.
     """
+    assert xyz.shape[0] == labels.shape[0] == remapped_labels.shape[0], \
+        f"Mismatched point counts: \n" \
+        f"n_xyz={xyz.shape[0]}, n_labels={labels.shape[0]}, n_remapped={remapped_labels.shape[0]}"
     header = laspy.LasHeader(point_format=3, version="1.2")
     header.offsets = np.min(xyz, axis=0)
     header.scales = np.array([0.001, 0.001, 0.001])
@@ -87,7 +90,6 @@ def process_semantic3d(
     dry_run: bool = False,
     plot: bool = False,
     specific_file: Optional[str] = None,
-    trunk_backend: str = 'cpu',
     chunk_size: Optional[int] = 10_000
 ) -> None:
     """Process Semantic3D dataset: remap .labels files using geometric features."""
@@ -100,43 +102,17 @@ def process_semantic3d(
     _print_processing_header('Semantic3D', input_dir, output_dir, len(label_files), 
                             dry_run, plot, mapping)
 
-    # Initialize Trunk Detector
-    trunk_detector = None
-    effective_chunk_size = chunk_size
-    backend = trunk_backend.lower()
-
-    if backend == 'gpu':
-        try:
-            from trunk_detection_torch_projection import TorchTrunkDetector
-            print("🚀 Using TorchTrunkDetector (GPU Backend: Projection Ratio Method)...")
-            
-            trunk_detector = TorchTrunkDetector(
-                radius=0.2,
-                grid_resolution=0.01,
-                projection_ratio_threshold=0.4,
-                min_height=-1.5,
-                max_height=3.0,
-                min_cluster_size=2000,
-                min_neighbors=15,
-                max_neighbors=2048,
-            )
-            # GPU implementation handles its own internal chunking
-            effective_chunk_size = None 
-        except ImportError as e:
-            print(f"⚠️  Failed to import GPU detector: {e}. Falling back to CPU.")
-            backend = 'cpu'
-
-    if backend == 'cpu':
-        print("🐢 Using Standard TrunkDetector (CPU Backend)...")
-        trunk_detector = TrunkDetector(
-            radius=0.4,
-            search_method='radius',
-            linearity_threshold=0.8,
-            verticality_threshold=0.9,
-            min_height=-1.5,
-            max_height=5.0,
-            min_cluster_size=50
-        )
+    print("🚀 Using TorchTrunkDetector (GPU Backend: Projection Ratio Method)...")
+    trunk_detector = TorchTrunkDetector(
+        radius=0.2,
+        grid_resolution=0.01,
+        projection_ratio_threshold=0.4,
+        min_height=-1.5,
+        max_height=3.0,
+        min_cluster_size=2000,
+        min_neighbors=15,
+        max_neighbors=2048,
+    )
 
     overall_stats = {'files_processed': 0, 'total_points': 0}
     all_original_labels = []
@@ -147,7 +123,7 @@ def process_semantic3d(
         
         remapped_labels, stats = remap_labels(
             labels, mapping, xyz=xyz, dataset='semantic3d',
-            trunk_detector=trunk_detector, chunk_size=effective_chunk_size
+            trunk_detector=trunk_detector, chunk_size=chunk_size
         )
         
         # 🟢 Extract intermediate features if available

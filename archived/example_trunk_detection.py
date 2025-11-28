@@ -5,7 +5,7 @@ This script shows different usage patterns and parameter configurations.
 """
 
 import numpy as np
-from trunk_detection import TrunkDetector, process_las_file
+from archived.trunk_detection import TrunkDetector, process_las_file
 
 
 def example_basic_usage(input_file: str, output_file: str):

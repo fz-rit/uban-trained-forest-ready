@@ -115,14 +115,6 @@ Examples:
     )
 
     parser.add_argument(
-        '--trunk-backend',
-        type=str,
-        default='cpu',
-        choices=['cpu', 'gpu'],
-        help='Backend for trunk detection in Semantic3D (cpu or gpu)'
-    )
-
-    parser.add_argument(
         '--chunk-size',
         type=int,
         default=100000,
@@ -158,7 +150,6 @@ Examples:
 
     if args.dataset == 'semantic3d':
         chunk_size = None if args.chunk_size is None or args.chunk_size <= 0 else args.chunk_size
-        processor_kwargs['trunk_backend'] = args.trunk_backend
         processor_kwargs['chunk_size'] = chunk_size
 
     config['processor'](**processor_kwargs)

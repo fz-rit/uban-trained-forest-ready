@@ -10,7 +10,8 @@ from tqdm import tqdm
 
 # Add trunk_detection to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trunk_detection'))
-from trunk_detection import TrunkDetector
+# from trunk_detection import TrunkDetector
+from trunk_detection_torch_projection import TorchTrunkDetector
 
 
 def remap_labels(
@@ -18,8 +19,8 @@ def remap_labels(
     mapping: Dict, 
     xyz: np.ndarray = None, 
     dataset: str = None, 
-    trunk_detector: Optional[TrunkDetector] = None, 
-        chunk_size: Optional[int] = 10_000_000
+    trunk_detector: Optional[TorchTrunkDetector] = None, 
+        chunk_size: Optional[int] = 100_000
 ) -> Tuple[np.ndarray, Dict]:
     """
     Remap labels according to the provided mapping dictionary.
@@ -30,7 +31,7 @@ def remap_labels(
         mapping: Dictionary mapping original labels to new labels (int or list for conditional)
         xyz: Optional Nx3 array of XYZ coordinates (required for conditional mappings)
         dataset: Optional dataset name ('semantic3d', 'forestsemantic', etc.)
-        trunk_detector: Optional pre-initialized TrunkDetector instance
+        trunk_detector: Optional pre-initialized TorchTrunkDetector instance
             chunk_size: Optional maximum points to process at once for memory efficiency (default: 10M points). Pass None to disable chunking.
         
     Returns:
@@ -85,7 +86,7 @@ def remap_labels(
 def _remap_semantic3d_label3(
     label_points: np.ndarray,
     new_label: list,
-    trunk_detector: Optional[TrunkDetector],
+    trunk_detector: TorchTrunkDetector,
     chunk_size: Optional[int]
 ) -> np.ndarray:
     """Remap Semantic3D label 3 (high vegetation) to trunk or canopy based on geometry."""
@@ -94,18 +95,7 @@ def _remap_semantic3d_label3(
     if len(label_points) == 0:
         return np.array([], dtype=np.int32)
     
-    # Initialize TrunkDetector if not provided
-    if trunk_detector is None:
-        trunk_detector = TrunkDetector(
-            radius=0.4,
-            search_method='radius',
-            linearity_threshold=0.8,
-            verticality_threshold=0.9,
-            min_height=-1.5,
-            max_height=5.0,
-            min_cluster_size=50
-        )
-    
+
     # Process in chunks if dataset is too large (unless chunk_size is None)
     n_points = len(label_points)
     if chunk_size is not None and n_points > chunk_size:

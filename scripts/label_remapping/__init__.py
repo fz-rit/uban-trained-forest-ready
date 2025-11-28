@@ -12,7 +12,7 @@ from .label_io import (
 )
 
 from .label_remapper import remap_labels
-from .trunk_detection.trunk_detection_torch_projection import TorchTrunkDetector
+from .semantic3d_trunk_detection.trunk_detection_torch_projection import TorchTrunkDetector
 from .plot_label_comparison import (
         plot_before_after_histogram,
         plot_stacked_comparison,
