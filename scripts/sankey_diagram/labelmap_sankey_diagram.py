@@ -69,7 +69,7 @@ Conditional mappings:
 - Semantic3D label 3: height <= 0.2m → 2 (Trunk), else → 3 (Canopy)
 - ForestSemantic label 6: height < 5m AND within ±12m XY → 4 (Understory), else → 0 (Unlabeled)
 """
-semantic3d_mapping = {0: 0, 1: 1, 2: 1, 3: [2, 3], 4: 4, 5: 5, 6: 5, 7: 5, 8: 5}
+semantic3d_mapping = {0: 0, 1: 0, 2: 1, 3: [2, 3], 4: 4, 5: 0, 6: 5, 7: 0, 8: 5}
 forest_semantic_mapping = {1: 1, 2: 2, 3: 3, 4: 3, 5: 3, 6: [0,4], 7: 0}
 digiforests_mapping = {0: 0, 1: 1, 2: 4, 3: 2, 4: 3, 5: 5}
 
