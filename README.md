@@ -1,3 +1,5 @@
+Download AGU 2025 slides: 1) [.pptx file](https://docs.google.com/presentation/d/1GePbJQMjyO88qbllmX8zGwKZTktA6v3t/edit?usp=sharing&ouid=103409338848109063104&rtpof=true&sd=true); 2) [.pdf file](docs/Urban-Trained,%20Forest-Ready%20-%20AGU2025.pdf)  
+
 # Urban-Trained, Forest-Ready
 
 Utilities to remap labels across datasets and visualize mappings with <abbr title="Flow diagram where link widths represent values">Sankey</abbr> diagrams. Includes notes for <abbr title="Unsupervised Domain Adaptation">UDA</abbr> and <abbr title="Pseudo-Labeling">PL</abbr> in the pipeline.
@@ -10,9 +12,9 @@ Utilities to remap labels across datasets and visualize mappings with <abbr titl
 
 ## Install
 ```bash
-conda create -n domain_adapt_env python=3.11
+conda create -n domain_adapt_env python=3.11 -y
 conda activate domain_adapt_env
-pip install plotly kaleido numpy
+pip install plotly kaleido numpy matplotlib pandas
 ```
 
 ## Remap labels to unified classes
@@ -54,22 +56,5 @@ Outputs:
 - HTML: sankey_combined_all_datasets_weighted.html
 - PNG: sankey_combined_all_datasets_weighted.png (4800x2700, ~300 DPI)
 
-Editing weights:
-- Edit the JSON block at `sample_weights` in [class_mapping.json](class_mapping.json). Keys are label IDs as strings.
-- Example:
-```json
-{
-  "sample_weights": {
-    "Semantic3D": { "2": 125000 },
-    "ForestSemantic": { "5": 95000 },
-    "DigiForests": { "4": 70000 }
-  }
-}
-```
 
-Notes:
-- Node blocks have fixed thickness; link widths reflect weights.
-- Right-side merged class names are short (from `meta.class_display_names`), with counts appended unless `--no-annotate` is set.
-
-## See also
-- UDA/PL plan and code hooks: [pipeline.md](pipeline.md) (search for <abbr title="Unsupervised Domain Adaptation">UDA</abbr>, <abbr title="Pseudo-Labeling">PL</abbr>).
+````
