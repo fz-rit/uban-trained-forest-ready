@@ -1,4 +1,4 @@
-# Download AGU 2025 slides: [.pdf file](docs/Urban-Trained,%20Forest-Ready%20-%20AGU2025.pdf)  
+# Download AGU 2025 slides: [.pdf file](docs/UrbanTrainedForestReady-AGU2025-slides.pdf)  
 
 # Urban-Trained, Forest-Ready (to be updated)
 
