@@ -1,6 +1,6 @@
-Download AGU 2025 slides: 1) [.pptx file](https://docs.google.com/presentation/d/1GePbJQMjyO88qbllmX8zGwKZTktA6v3t/edit?usp=sharing&ouid=103409338848109063104&rtpof=true&sd=true); 2) [.pdf file](docs/Urban-Trained,%20Forest-Ready%20-%20AGU2025.pdf)  
+# Download AGU 2025 slides: [.pdf file](docs/Urban-Trained,%20Forest-Ready%20-%20AGU2025.pdf)  
 
-# Urban-Trained, Forest-Ready
+# Urban-Trained, Forest-Ready (to be updated)
 
 Utilities to remap labels across datasets and visualize mappings with <abbr title="Flow diagram where link widths represent values">Sankey</abbr> diagrams. Includes notes for <abbr title="Unsupervised Domain Adaptation">UDA</abbr> and <abbr title="Pseudo-Labeling">PL</abbr> in the pipeline.
 
