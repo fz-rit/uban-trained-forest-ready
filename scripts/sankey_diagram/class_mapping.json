@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "classes": {
+      "1": "forest_floor",
+      "2": "tree_trunks",
+      "3": "branches_canopy",
+      "4": "understory",
+      "5": "objects"
+    },
+    "ignore_index": 0,
+    "class_display_names": {
+      "1": "Ground",
+      "2": "Trunks",
+      "3": "Canopy",
+      "4": "Understory",
+      "5": "Miscellany",
+      "0": "Unlabeled"
+    },
+    "class_descriptions": {
+      "1": "ground/terrain",
+      "2": "stems",
+      "3": "mid/upper canopy",
+      "4": "low vegetation / understory",
+      "5": "manmade gear, poles, fences, vehicles, scanners, targets",
+      "0": "void / unlabeled"
+    }
+  },
+  "sample_weights": {
+    "Semantic3D": {
+      "0": 250789625,
+      "1": 1568252962,
+      "2": 809359327,
+      "3": 199539659,
+      "4": 196894634,
+      "5": 916877867,
+      "6": 143087709,
+      "7": 78790283,
+      "8": 34286149
+    },
+    "ForestSemantic": {
+      "1": 157438935,
+      "2": 37490858,
+      "3": 10520670,
+      "4": 5156127,
+      "5": 101610856,
+      "6": 43256875
+    },
+    "DigiForests": {
+      "0": 27849607,
+      "1": 66097135,
+      "2": 73932006,
+      "3": 37477163,
+      "4": 58111788,
+      "5": 1645028
+    }
+  }
+}
